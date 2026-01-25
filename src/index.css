@@ -1,0 +1,199 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Iron Man Theme - Dark Mode Primary */
+    --background: 220 20% 8%;
+    --foreground: 45 100% 95%;
+
+    --card: 220 15% 12%;
+    --card-foreground: 45 100% 95%;
+
+    --popover: 220 15% 10%;
+    --popover-foreground: 45 100% 95%;
+
+    /* Stark Red */
+    --primary: 0 84% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Gold Accent */
+    --secondary: 38 92% 50%;
+    --secondary-foreground: 220 20% 8%;
+
+    /* Metallic Gray */
+    --muted: 220 15% 18%;
+    --muted-foreground: 220 10% 60%;
+
+    /* Arc Reactor Blue */
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 20%;
+    --input: 220 15% 15%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.75rem;
+
+    /* Custom Iron Man Variables */
+    --stark-red: 0 84% 50%;
+    --stark-gold: 38 92% 50%;
+    --arc-reactor: 217 91% 60%;
+    --arc-reactor-glow: 199 89% 48%;
+    --metallic-dark: 220 20% 8%;
+    --metallic-mid: 220 15% 15%;
+    --metallic-light: 220 10% 25%;
+    
+    /* Gradients */
+    --gradient-stark: linear-gradient(135deg, hsl(var(--stark-red)) 0%, hsl(38 80% 45%) 100%);
+    --gradient-arc: linear-gradient(135deg, hsl(var(--arc-reactor)) 0%, hsl(var(--arc-reactor-glow)) 100%);
+    --gradient-metallic: linear-gradient(180deg, hsl(220 15% 18%) 0%, hsl(220 20% 8%) 100%);
+    
+    /* Shadows */
+    --shadow-arc: 0 0 20px hsl(var(--arc-reactor) / 0.5), 0 0 40px hsl(var(--arc-reactor) / 0.3);
+    --shadow-stark: 0 0 20px hsl(var(--stark-red) / 0.3);
+    --shadow-gold: 0 0 15px hsl(var(--stark-gold) / 0.4);
+
+    --sidebar-background: 220 20% 8%;
+    --sidebar-foreground: 45 100% 95%;
+    --sidebar-primary: 0 84% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 18%;
+    --sidebar-accent-foreground: 45 100% 95%;
+    --sidebar-border: 220 15% 20%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: 'Orbitron', sans-serif;
+  }
+  
+  .font-body {
+    font-family: 'Rajdhani', sans-serif;
+  }
+
+  .glow-arc {
+    box-shadow: var(--shadow-arc);
+  }
+
+  .glow-stark {
+    box-shadow: var(--shadow-stark);
+  }
+
+  .glow-gold {
+    box-shadow: var(--shadow-gold);
+  }
+
+  .gradient-stark {
+    background: var(--gradient-stark);
+  }
+
+  .gradient-arc {
+    background: var(--gradient-arc);
+  }
+
+  .gradient-metallic {
+    background: var(--gradient-metallic);
+  }
+
+  .hud-border {
+    border: 1px solid hsl(var(--arc-reactor) / 0.3);
+    position: relative;
+  }
+
+  .hud-border::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: 10%;
+    right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, hsl(var(--arc-reactor)), transparent);
+  }
+
+  .hud-border::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 10%;
+    right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, hsl(var(--arc-reactor)), transparent);
+  }
+
+  .text-glow-arc {
+    text-shadow: 0 0 10px hsl(var(--arc-reactor) / 0.8), 0 0 20px hsl(var(--arc-reactor) / 0.5);
+  }
+
+  .text-glow-gold {
+    text-shadow: 0 0 10px hsl(var(--stark-gold) / 0.8), 0 0 20px hsl(var(--stark-gold) / 0.5);
+  }
+
+  @keyframes pulse-arc {
+    0%, 100% {
+      box-shadow: 0 0 20px hsl(var(--arc-reactor) / 0.5), 0 0 40px hsl(var(--arc-reactor) / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px hsl(var(--arc-reactor) / 0.7), 0 0 60px hsl(var(--arc-reactor) / 0.5);
+    }
+  }
+
+  @keyframes recording-pulse {
+    0%, 100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 0 hsl(var(--stark-red) / 0.7);
+    }
+    50% {
+      transform: scale(1.05);
+      box-shadow: 0 0 0 10px hsl(var(--stark-red) / 0);
+    }
+  }
+
+  @keyframes hud-scan {
+    0% {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    50% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(100%);
+      opacity: 0;
+    }
+  }
+
+  .animate-pulse-arc {
+    animation: pulse-arc 2s ease-in-out infinite;
+  }
+
+  .animate-recording {
+    animation: recording-pulse 1.5s ease-in-out infinite;
+  }
+
+  .animate-hud-scan {
+    animation: hud-scan 3s ease-in-out infinite;
+  }
+}

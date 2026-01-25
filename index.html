@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>J.A.R.V.I.S. - AI Assistant</title>
+    <meta name="description" content="J.A.R.V.I.S. - Just A Rather Very Intelligent System" />
+    <meta name="author" content="JARVIS" />
+
+    <meta property="og:title" content="J.A.R.V.I.S. - AI Assistant" />
+    <meta property="og:description" content="J.A.R.V.I.S. - Just A Rather Very Intelligent System" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@Lovable" />
+    <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+    <!-- Remove unwanted preload tags injected by browser extensions -->
+    <script>
+      (function() {
+        // Remove preload tags from external domains that aren't needed
+        const unwantedDomains = ['apps.rokt.com'];
+        
+        function removeUnwantedPreloads() {
+          const links = document.querySelectorAll('link[rel="preload"]');
+          links.forEach(link => {
+            const href = link.getAttribute('href');
+            if (href && unwantedDomains.some(domain => href.includes(domain))) {
+              console.log('Removing unwanted preload:', href);
+              link.remove();
+            }
+          });
+        }
+        
+        // Remove existing preload tags immediately
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', removeUnwantedPreloads);
+        } else {
+          removeUnwantedPreloads();
+        }
+        
+        // Monitor for dynamically added preload tags
+        const observer = new MutationObserver(mutations => {
+          mutations.forEach(mutation => {
+            mutation.addedNodes.forEach(node => {
+              if (node.nodeType === 1 && node.tagName === 'LINK') {
+                const rel = node.getAttribute('rel');
+                const href = node.getAttribute('href');
+                if (rel === 'preload' && href && unwantedDomains.some(domain => href.includes(domain))) {
+                  console.log('Removing dynamically added unwanted preload:', href);
+                  node.remove();
+                }
+              }
+            });
+          });
+        });
+        
+        // Start observing as soon as head is available
+        if (document.head) {
+          observer.observe(document.head, { childList: true, subtree: true });
+        } else {
+          document.addEventListener('DOMContentLoaded', () => {
+            observer.observe(document.head, { childList: true, subtree: true });
+          });
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
