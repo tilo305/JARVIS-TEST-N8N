@@ -191,6 +191,40 @@ export const useAudioRecorder = (vadConfig?: VADConfig) => {
     }
   }, [handleAutoFinalize]);
 
+  const checkMicrophonePermission = useCallback(async (): Promise<{ granted: boolean; error?: string }> => {
+    try {
+      // Check if getUserMedia is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        return {
+          granted: false,
+          error: 'Microphone access is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Edge.'
+        };
+      }
+
+      // Check permission status (if available)
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const permissionStatus = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+          if (permissionStatus.state === 'denied') {
+            return {
+              granted: false,
+              error: 'Microphone permission is denied. Please enable it in your browser settings.'
+            };
+          }
+        } catch {
+          // Permission query API might not be supported, continue with getUserMedia attempt
+        }
+      }
+
+      return { granted: true };
+    } catch (error) {
+      return {
+        granted: false,
+        error: error instanceof Error ? error.message : 'Failed to check microphone permission.'
+      };
+    }
+  }, []);
+
   const startRecording = useCallback(async (handsFreeMode: boolean = false) => {
     try {
       isHandsFreeModeRef.current = handsFreeMode;
@@ -198,6 +232,12 @@ export const useAudioRecorder = (vadConfig?: VADConfig) => {
       
       // VAD is always enabled - it's the core feature
       // handsFreeMode just controls whether to auto-restart after sending
+
+      // Check permissions first (optional, but helpful for better error messages)
+      const permissionCheck = await checkMicrophonePermission();
+      if (!permissionCheck.granted && permissionCheck.error) {
+        throw new Error(permissionCheck.error);
+      }
 
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -231,15 +271,53 @@ export const useAudioRecorder = (vadConfig?: VADConfig) => {
       console.log('🎙️ Audio recording started with VAD');
     } catch (error) {
       console.error('Failed to start recording:', error);
+      
+      // Handle specific error types with user-friendly messages
+      let errorMessage = 'Failed to access microphone.';
+      
+      if (error instanceof Error) {
+        const errorName = error.name;
+        const errorMessage_lower = error.message.toLowerCase();
+        
+        // Permission denied errors
+        if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError' || 
+            errorMessage_lower.includes('permission denied') || 
+            errorMessage_lower.includes('not allowed')) {
+          errorMessage = 'Microphone permission denied. Please allow microphone access in your browser settings and try again.';
+        }
+        // No microphone found
+        else if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError' ||
+                 errorMessage_lower.includes('not found') ||
+                 errorMessage_lower.includes('no microphone')) {
+          errorMessage = 'No microphone found. Please connect a microphone and try again.';
+        }
+        // Microphone already in use
+        else if (errorName === 'NotReadableError' || errorName === 'TrackStartError' ||
+                 errorMessage_lower.includes('not readable') ||
+                 errorMessage_lower.includes('already in use')) {
+          errorMessage = 'Microphone is already in use by another application. Please close other apps using the microphone and try again.';
+        }
+        // Security/HTTPS errors
+        else if (errorName === 'SecurityError' || 
+                 errorMessage_lower.includes('secure context') ||
+                 errorMessage_lower.includes('https required')) {
+          errorMessage = 'Microphone access requires a secure connection (HTTPS). Please use HTTPS or localhost.';
+        }
+        // Generic error
+        else {
+          errorMessage = error.message || 'Failed to access microphone. Please check your browser settings.';
+        }
+      }
+      
       setState({
         isRecording: false,
         audioData: null,
-        error: error instanceof Error ? error.message : 'Microphone access denied. Please enable microphone permissions.',
+        error: errorMessage,
         speechActive: false,
         vadEnabled: state.vadEnabled
       });
     }
-  }, [setupAudioWorklet, state.vadEnabled]);
+  }, [setupAudioWorklet, state.vadEnabled, checkMicrophonePermission]);
 
   const stopRecording = useCallback(async () => {
     if (audioWorkletNodeRef.current && state.isRecording) {
@@ -326,5 +404,6 @@ export const useAudioRecorder = (vadConfig?: VADConfig) => {
     clearAudioData,
     updateVADConfig,
     toggleVAD,
+    checkMicrophonePermission,
   };
 };

@@ -2,6 +2,13 @@ import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
 
+// Load debug tools in development
+if (import.meta.env.DEV) {
+  import("../debug/index.ts").catch(() => {
+    // Debug tools are optional, don't fail if they can't load
+  });
+}
+
 // Error handling for root rendering
 const rootElement = document.getElementById("root");
 

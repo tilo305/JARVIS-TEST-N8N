@@ -1,0 +1,378 @@
+{
+  "name": "JARVIS Cartesia Voice (STT + LLM + TTS)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jarvis-voice",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "webhookId": "jarvis-voice"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first();\nconst body = item.json.body || item.json;\nconst audio = body?.audio;\nif (!audio?.data) return [{ json: { ...body, transcript: body?.message || '' } }];\nconst raw = Buffer.from(audio.data, 'base64');\nconst fmt = (audio.format || '').toLowerCase();\nif (fmt.includes('mp3') || fmt.includes('mpeg') || fmt.includes('mpga') || fmt.includes('audio/mpeg')) {\n  const data = await this.helpers.prepareBinaryData(raw, 'audio.mp3');\n  return [{ json: { ...body }, binary: { data } }];\n}\nconst sampleRate = 16000;\nconst channels = 1;\nconst bitsPerSample = 16;\nconst byteRate = sampleRate * channels * (bitsPerSample / 8);\nconst dataSize = raw.length;\nconst fileSize = 36 + dataSize;\nconst header = Buffer.alloc(44);\nlet offset = 0;\nheader.write('RIFF', offset); offset += 4;\nheader.writeUInt32LE(fileSize, offset); offset += 4;\nheader.write('WAVE', offset); offset += 4;\nheader.write('fmt ', offset); offset += 4;\nheader.writeUInt32LE(16, offset); offset += 4;\nheader.writeUInt16LE(1, offset); offset += 2;\nheader.writeUInt16LE(channels, offset); offset += 2;\nheader.writeUInt32LE(sampleRate, offset); offset += 4;\nheader.writeUInt32LE(byteRate, offset); offset += 4;\nheader.writeUInt16LE((bitsPerSample / 8) * channels, offset); offset += 2;\nheader.writeUInt16LE(bitsPerSample, offset); offset += 2;\nheader.write('data', offset); offset += 4;\nheader.writeUInt32LE(dataSize, offset);\nconst wav = Buffer.concat([header, raw]);\nconst data = await this.helpers.prepareBinaryData(wav, 'audio.wav');\nreturn [{ json: { ...body }, binary: { data } }];"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "PCM to WAV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-audio",
+              "leftValue": "={{ $binary?.data ? 'yes' : '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Has Audio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cartesia.ai/stt",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cartesia-Version",
+              "value": "2025-04-16"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "model",
+              "value": "ink-whisper"
+            },
+            {
+              "parameterType": "formData",
+              "name": "language",
+              "value": "en"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Cartesia STT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Cartesia API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "stt-transcript",
+              "name": "transcript",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Set Transcript (STT)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    { \"role\": \"system\", \"content\": \"You are J.A.R.V.I.S., a helpful AI assistant. Reply concisely.\" },\n    { \"role\": \"user\", \"content\": \"{{ $json.transcript }}\" }\n  ]\n}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "OpenAI Chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first();\nconst content = item.json?.choices?.[0]?.message?.content ?? '';\nreturn [{ json: { llmReply: content } }];"
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Extract LLM Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cartesia.ai/tts/bytes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cartesia-Version",
+              "value": "2025-04-16"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model_id: 'sonic-turbo', transcript: $json.llmReply, voice: { mode: 'id', id: 'f786b574-daa5-4673-aa0c-cbe3e8534c02' }, output_format: { container: 'mp3' }, language: 'en' }) }}",
+        "options": {
+          "response": {
+            "responseFormat": "file",
+            "outputPropertyName": "data"
+          }
+        }
+      },
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Cartesia TTS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Cartesia API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByFields": {
+          "values": []
+        },
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": false
+        }
+      },
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first();\nconst reply = item.json?.llmReply ?? item.json?.message ?? item.json?.text ?? '';\nconst binary = item.binary?.data;\n\nif (!reply) return [{ json: { message: 'No reply.', audio: null } }];\n\nconst out = { message: reply };\nif (binary) {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const base64 = Buffer.from(buffer).toString('base64');\n  out.audio = { data: base64, format: 'mp3' };\n}\n\nreturn [{ json: out }];"
+      },
+      "id": "a1b2c3d4-000a-4000-8000-00000000000a",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "a1b2c3d4-000b-4000-8000-00000000000b",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2440, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "PCM to WAV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PCM to WAV": {
+      "main": [
+        [
+          {
+            "node": "Has Audio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Audio?": {
+      "main": [
+        [
+          {
+            "node": "Cartesia STT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenAI Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cartesia STT": {
+      "main": [
+        [
+          {
+            "node": "Set Transcript (STT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Transcript (STT)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat": {
+      "main": [
+        [
+          {
+            "node": "Extract LLM Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract LLM Reply": {
+      "main": [
+        [
+          {
+            "node": "Cartesia TTS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cartesia TTS": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -1,6 +1,40 @@
-import { Zap, Shield } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Zap, Shield, Wifi, WifiOff, Mic, Loader2 } from 'lucide-react';
+import { checkN8NConnection } from '@/api/n8n';
+import { cn } from '@/lib/utils';
+import type { ConversationStatus } from '@/types/chat';
 
-export const ChatHeader = () => {
+interface ChatHeaderProps {
+  /** Voice Bot Design S2: show who has the floor (listening / thinking / idle). */
+  conversationStatus?: ConversationStatus;
+}
+
+export const ChatHeader = ({ conversationStatus = 'idle' }: ChatHeaderProps) => {
+  const [isConnected, setIsConnected] = useState<boolean | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+
+  useEffect(() => {
+    // Check connection on mount
+    const checkConnection = async () => {
+      setIsChecking(true);
+      try {
+        const connected = await checkN8NConnection();
+        setIsConnected(connected);
+      } catch {
+        setIsConnected(false);
+      } finally {
+        setIsChecking(false);
+      }
+    };
+
+    checkConnection();
+
+    // Check connection periodically (every 30 seconds)
+    const interval = setInterval(checkConnection, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <header className="relative p-4 border-b border-border bg-metallic-dark/90 backdrop-blur-sm overflow-hidden">
       {/* Animated scan line */}
@@ -29,13 +63,66 @@ export const ChatHeader = () => {
           </div>
         </div>
 
-        {/* Status Indicator */}
+        {/* Status Indicator — S2: system status clear; conversation state (listening/thinking) */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-metallic-mid border border-accent/30">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <span className="text-xs font-body text-accent uppercase tracking-wider">
-              Online
-            </span>
+          {conversationStatus !== 'idle' && (
+            <div
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all",
+                conversationStatus === 'listening'
+                  ? "bg-accent/20 border-accent/50"
+                  : "bg-metallic-mid border-arc/50"
+              )}
+            >
+              {conversationStatus === 'listening' ? (
+                <>
+                  <Mic className="w-3 h-3 text-accent" />
+                  <span className="text-xs font-body text-accent uppercase tracking-wider">
+                    Listening
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="w-3 h-3 text-arc animate-spin" />
+                  <span className="text-xs font-body text-muted-foreground uppercase tracking-wider">
+                    Thinking…
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          <div
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all",
+              isConnected === true
+                ? "bg-metallic-mid border-accent/30"
+                : isConnected === false
+                ? "bg-destructive/20 border-destructive/50"
+                : "bg-metallic-mid border-border/50"
+            )}
+          >
+            {isChecking ? (
+              <>
+                <div className="w-2 h-2 rounded-full bg-muted-foreground animate-pulse" />
+                <span className="text-xs font-body text-muted-foreground uppercase tracking-wider">
+                  Checking...
+                </span>
+              </>
+            ) : isConnected === true ? (
+              <>
+                <Wifi className="w-3 h-3 text-accent" />
+                <span className="text-xs font-body text-accent uppercase tracking-wider">
+                  Connected
+                </span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-3 h-3 text-destructive" />
+                <span className="text-xs font-body text-destructive uppercase tracking-wider">
+                  Offline
+                </span>
+              </>
+            )}
           </div>
           <div className="p-2 rounded-lg bg-metallic-mid border border-border">
             <Shield className="w-5 h-5 text-secondary" />

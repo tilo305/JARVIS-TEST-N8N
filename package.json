@@ -10,7 +10,11 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:webhook": "node scripts/test-webhook.mjs",
+    "test:webhook:audio": "node scripts/test-webhook.mjs --audio",
+    "test:audio:generate": "node scripts/generate-test-audio.mjs",
+    "test:webhook:json-audio": "node scripts/test-webhook-json-audio.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

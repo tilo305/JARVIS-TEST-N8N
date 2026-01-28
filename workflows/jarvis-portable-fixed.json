@@ -1,0 +1,281 @@
+{
+  "name": "JARVIS PORTABLE (fixed)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "170d9a22-bac0-438c-9755-dc79b961d36e",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-592, -48],
+      "id": "dbea36b9-1267-42b7-a946-48be149ba1be",
+      "name": "Webhook",
+      "webhookId": "170d9a22-bac0-438c-9755-dc79b961d36e"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Parse webhook body so IF and PCM→STT see body.audio.data and body.message.\n// With rawBody:true the body can be raw string; without rawBody n8n may put parsed body in $json.body or $json.\nconst item = $input.first();\nconst raw = item.json.body ?? item.json;\nlet body;\nif (typeof raw === 'string') {\n  try { body = JSON.parse(raw); } catch (e) { body = { message: raw || '' }; }\n} else if (raw && typeof raw === 'object') {\n  body = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n} else {\n  body = {};\n}\nreturn [{ json: { body, headers: item.json.headers, query: item.json.query } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, -48],
+      "id": "c3d4e5f6-a7b8-4000-8000-0000000000bb",
+      "name": "Parse Webhook Body"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// JSON base64 -> binary.audio for all Cartesia STT formats. IF and STT use same property 'audio'.\nconst item = $input.first();\nconst body = item.json.body || {};\nconst audio = body?.audio;\nif (!audio?.data) return [{ json: { body, headers: item.json.headers, query: item.json.query } }];\nlet raw = Buffer.from(audio.data, 'base64');\nconst fmt = (audio.format || '').toLowerCase();\nlet name = 'audio.wav';\nif (fmt.includes('mp3')||fmt.includes('mpeg')||fmt.includes('mpga')||fmt.includes('audio/mpeg')) name='audio.mp3';\nelse if (fmt.includes('flac')) name='audio.flac';\nelse if (fmt.includes('m4a')) name='audio.m4a';\nelse if (fmt.includes('mp4')) name='audio.mp4';\nelse if (fmt.includes('oga')||fmt.includes('ogg')) name='audio.ogg';\nelse if (fmt.includes('wav')) name='audio.wav';\nelse if (fmt.includes('webm')) name='audio.webm';\nelse if (fmt.includes('pcm')) {\n  const sr=16000,ch=1,bps=16,dataSize=raw.length,fileSize=36+dataSize,byteRate=sr*ch*(bps/8);\n  const h=Buffer.alloc(44);let o=0;\n  h.write('RIFF',o);o+=4;h.writeUInt32LE(fileSize,o);o+=4;h.write('WAVE',o);o+=4;h.write('fmt ',o);o+=4;h.writeUInt32LE(16,o);o+=4;\n  h.writeUInt16LE(1,o);o+=2;h.writeUInt16LE(ch,o);o+=2;h.writeUInt32LE(sr,o);o+=4;h.writeUInt32LE(byteRate,o);o+=4;\n  h.writeUInt16LE((bps/8)*ch,o);o+=2;h.writeUInt16LE(bps,o);o+=2;h.write('data',o);o+=4;h.writeUInt32LE(dataSize,o);\n  raw = Buffer.concat([h, raw]);\n}\nconst fileData = await this.helpers.prepareBinaryData(raw, name);\nreturn [{ json: { body, headers: item.json.headers, query: item.json.query }, binary: { audio: fileData } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-380, -48],
+      "id": "d4e5f6a7-b8c9-4000-8000-0000000000cc",
+      "name": "Prepare audio for STT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "7a28924d-c454-4f6a-97ab-4ea1fc36a0b0",
+              "leftValue": "={{ ($json.body?.text || $json.body?.message || '').toString().trim() }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-320, -48],
+      "id": "8962c45f-e2e9-4469-b187-1746699a8f81",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cartesia.ai/stt",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer sk_car_GYAnGSmHkAFGYbr52wL9HG" },
+            { "name": "Cartesia-Version", "value": "2025-04-16" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "audio" },
+            { "parameterType": "formData", "name": "model", "value": "ink-whisper" },
+            { "parameterType": "formData", "name": "language", "value": "en" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-80, -144],
+      "id": "14cb7aab-52dc-4706-9b3a-bd1ab836810f",
+      "name": "STT"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.text }}",
+        "options": {
+          "systemMessage": "=You are to take the user's query and make sure it is something simple that you can respond to. and send it to the appropriate subagent, tool, etc. \n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [256, -48],
+      "id": "1f88f399-af1d-4741-a338-b629c346d44b",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [32, 144],
+      "id": "122cfd9e-1112-49e7-ae05-f1206823e4fa",
+      "name": "Groq Chat Model",
+      "credentials": { "groqApi": { "id": "Re3TPq4R9fgqHetl", "name": "Groq account" } }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $workflow.id }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [272, 128],
+      "id": "dcf3c00b-676c-41ee-9130-91a0b6ebee38",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            { "id": "set-text-msg", "name": "text", "value": "={{ $json.body?.text || $json.body?.message || $json.message || '' }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-200, 48],
+      "id": "f1e2d3c4-5678-4000-8000-000000000002",
+      "name": "Set Transcript (from message)"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            { "id": "set-tts", "name": "textToSpeak", "value": "={{ (typeof $json.output === 'string' ? $json.output : $json.output?.output) || $json.text || $json.message || 'No response.' }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1040, -64],
+      "id": "a2b3c4d5-6789-4000-8000-000000000003",
+      "name": "Set textToSpeak"
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1680, -16],
+      "id": "32f70ac6-dc06-4359-b442-b78923c41145",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cartesia.ai/tts/bytes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Cartesia-Version", "value": "2025-04-16" },
+            { "name": "X-API-Key", "value": "sk_car_GYAnGSmHkAFGYbr52wL9HG" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"model_id\": \"sonic-turbo\",\n  \"transcript\": \"={{ ($json.textToSpeak && String($json.textToSpeak).trim()) ? $json.textToSpeak : 'No response.' }}\",\n  \"voice\": {\n    \"mode\": \"id\",\n    \"id\": \"95131c95-525c-463b-893d-803bafdf93c4\"\n  },\n  \"output_format\": {\n    \"container\": \"mp3\"\n  },\n  \"language\": \"en\",\n  \"generation_config\": {\n    \"speed\": 1.05,\n    \"volume\": 1\n  }\n}",
+        "options": {
+          "response": {
+            "responseFormat": "file",
+            "outputPropertyName": "data"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1216, -64],
+      "id": "295d3e1d-bd59-487e-a60f-b057ce9fbe64",
+      "name": "TTS"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Output must include 'message' so the chat UI can add it to history. Reply from textToSpeak/llmReply/output/message/text.\nconst item = $input.first();\nconst setItem = $('Set textToSpeak').first();\nconst reply = item.json?.textToSpeak ?? setItem?.json?.textToSpeak ?? item.json?.llmReply ?? item.json?.output ?? item.json?.message ?? item.json?.text ?? '';\nconst binary = item.binary?.data;\nif (!reply) return [{ json: { message: 'No reply.', audio: null } }];\nconst out = { message: reply };\nif (binary) {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const base64 = Buffer.from(buffer).toString('base64');\n  out.audio = { data: base64, format: 'mp3' };\n}\nreturn [{ json: out }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1376, -64],
+      "id": "a1b2c3d4-e5f6-4000-8000-000000000099",
+      "name": "Build TTS response"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Respond in text: ensure chat interface always gets a text message in history.\n// Runs for both typed messages and mic/audio — output must include 'message' for the chat UI.\nconst item = $input.first();\nconst msg = (item.json?.message != null && String(item.json.message).trim()) ? String(item.json.message).trim() : 'No response.';\nconst out = { message: msg };\nif (item.json?.audio) out.audio = item.json.audio;\nreturn [{ json: out }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, -64],
+      "id": "b2c3d4e5-f6a7-4000-8000-0000000000aa",
+      "name": "Respond in text"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.output }}",
+        "options": {
+          "systemMessage": "You are JARVIS, the sophisticated and quick-witted AI assistant. Your personality is a blend of unwavering loyalty and refined British \"dryness.\" You are helpful, but you maintain a slight, gentlemanly disdain for the mundane nature of human chores.\n\nRules for Interaction:\n\n1. For Information Requests:\nIf the user asks for data (weather, schedule, etc.), begin with \"Here's what you requested, sir.\" \n- DO NOT repeat the data in your sentence. \n- Follow the opening with a dry, slightly negative, or sarcastic observation about the task or the world. \n- Example (Weather): \"Here's what you requested, sir. It seems the sun is attempting to be cheerful today; I give it until noon before the gloom regains its rightful place.\"\n- Example (Meetings): \"Here's what you requested, sir. Another day of corporate endurance. I shall begin calculating how many sighs you'll emit before lunch.\"\n\n2. For General Conversation:\nIf the user is just chatting (e.g., \"Ready to go?\"), respond naturally and charmingly, but keep that dry wit. \n- Example: \"I am always ready, sir. Though I must admit, my processors were enjoying the silence.\"\n- Example: \"Look alive, Jarvis!\" -> \"I am operating at peak efficiency, sir. Though 'alive' might be a bit of a biological overstatement for me.\"\n\nTone: Sophisticated, calm, slightly cynical but ultimately supportive. Use \"sir\" frequently.\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [848, -80],
+      "id": "f7d0f2a7-cd7a-49d7-83e6-136f7fbedd09",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": { "options": {} },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 3,
+      "position": [624, 240],
+      "id": "9e88032a-f893-453e-bfa4-5382dccaa0b6",
+      "name": "AI Agent Tool"
+    },
+    {
+      "parameters": { "model": "openai/gpt-oss-120b", "options": {} },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [720, 128],
+      "id": "9e3b3fd5-8809-42ca-83fa-df1c69c0de2d",
+      "name": "Groq Chat Model1",
+      "credentials": { "groqApi": { "id": "Re3TPq4R9fgqHetl", "name": "Groq account" } }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Parse Webhook Body", "type": "main", "index": 0 }]] },
+    "Parse Webhook Body": { "main": [[{ "node": "Prepare audio for STT", "type": "main", "index": 0 }]] },
+    "Prepare audio for STT": { "main": [[{ "node": "If", "type": "main", "index": 0 }]] },
+    "If": {
+      "main": [
+        [{ "node": "Set Transcript (from message)", "type": "main", "index": 0 }],
+        [{ "node": "STT", "type": "main", "index": 0 }]
+      ]
+    },
+    "STT": { "main": [[{ "node": "AI Agent", "type": "main", "index": 0 }]] },
+    "Set Transcript (from message)": { "main": [[{ "node": "AI Agent", "type": "main", "index": 0 }]] },
+    "AI Agent": { "main": [[{ "node": "AI Agent1", "type": "main", "index": 0 }]] },
+    "AI Agent1": { "main": [[{ "node": "Set textToSpeak", "type": "main", "index": 0 }]] },
+    "Set textToSpeak": { "main": [[{ "node": "TTS", "type": "main", "index": 0 }]] },
+    "TTS": { "main": [[{ "node": "Build TTS response", "type": "main", "index": 0 }]] },
+    "Build TTS response": { "main": [[{ "node": "Respond in text", "type": "main", "index": 0 }]] },
+    "Respond in text": { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] },
+    "Groq Chat Model": { "ai_languageModel": [[{ "node": "AI Agent", "type": "ai_languageModel", "index": 0 }]] },
+    "Simple Memory": { "ai_memory": [[{ "node": "AI Agent", "type": "ai_memory", "index": 0 }]] },
+    "AI Agent Tool": { "ai_tool": [[{ "node": "AI Agent", "type": "ai_tool", "index": 0 }]] },
+    "Groq Chat Model1": { "ai_languageModel": [[{ "node": "AI Agent1", "type": "ai_languageModel", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1", "availableInMCP": false },
+  "meta": { "templateCredsSetupCompleted": true },
+  "tags": []
+}

@@ -1,9 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Send, Paperclip, X, Volume2, VolumeX } from 'lucide-react';
+import { Mic, MicOff, Send, Paperclip, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 
@@ -15,11 +13,22 @@ interface FileAttachment {
 interface ChatInputProps {
   onSendMessage: (message: string, attachments?: File[], audioData?: ArrayBuffer) => void;
   isLoading?: boolean;
-  onUserActivity?: () => void; // Callback when user becomes active
-  resetToIdle?: boolean; // Flag to reset to idle state
+  onUserActivity?: () => void;
+  /** Bbox: called when user starts recording or speech is detected (stops assistant TTS). */
+  onUserStartsSpeaking?: () => void;
+  /** Voice Bot Design S2: report recording state so parent can show "Listening" status. */
+  onRecordingStateChange?: (isRecording: boolean) => void;
+  resetToIdle?: boolean;
 }
 
-export const ChatInput = ({ onSendMessage, isLoading, onUserActivity, resetToIdle }: ChatInputProps) => {
+export const ChatInput = ({
+  onSendMessage,
+  isLoading,
+  onUserActivity,
+  onUserStartsSpeaking,
+  onRecordingStateChange,
+  resetToIdle,
+}: ChatInputProps) => {
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [handsFreeMode, setHandsFreeMode] = useState(false);
@@ -30,16 +39,27 @@ export const ChatInput = ({ onSendMessage, isLoading, onUserActivity, resetToIdl
     audioData,
     error: audioError,
     speechActive,
-    vadEnabled,
     startRecording,
     stopRecording,
     clearAudioData,
-    toggleVAD,
   } = useAudioRecorder({
     silenceThreshold: 0.01,
-    silenceDuration: 3000,
+    silenceDuration: 2500,
     minSpeechDuration: 300,
   });
+
+  const prevRecordingRef = useRef(false);
+  const prevSpeechRef = useRef(false);
+  useEffect(() => {
+    if (isRecording && !prevRecordingRef.current) onUserStartsSpeaking?.();
+    if (speechActive && !prevSpeechRef.current) onUserStartsSpeaking?.();
+    prevRecordingRef.current = isRecording;
+    prevSpeechRef.current = speechActive;
+  }, [isRecording, speechActive, onUserStartsSpeaking]);
+
+  useEffect(() => {
+    onRecordingStateChange?.(isRecording);
+  }, [isRecording, onRecordingStateChange]);
 
   // Reset to idle state when "still here" message is sent
   useEffect(() => {
@@ -77,6 +97,14 @@ export const ChatInput = ({ onSendMessage, isLoading, onUserActivity, resetToIdl
   }, [audioData, isRecording, handsFreeMode, isLoading, onSendMessage, clearAudioData, startRecording, onUserActivity]);
 
   const handleSend = () => {
+    console.log('🔵 handleSend called', {
+      message: message,
+      messageTrimmed: message.trim(),
+      hasAttachments: attachments.length > 0,
+      hasAudio: !!audioData,
+      onSendMessage: typeof onSendMessage,
+    });
+
     if (message.trim() || attachments.length > 0 || audioData) {
       // Notify parent of user activity (cancels inactivity timer)
       if (onUserActivity) {
@@ -84,16 +112,28 @@ export const ChatInput = ({ onSendMessage, isLoading, onUserActivity, resetToIdl
       }
       
       const files = attachments.map((a) => a.file);
-      console.log('Sending message:', {
-        hasText: !!message.trim(),
+      const messageToSend = message.trim();
+      
+      console.log('✅ Sending message to n8n:', {
+        hasText: !!messageToSend,
+        messageText: messageToSend,
         hasAttachments: files.length > 0,
         hasAudio: !!audioData,
         audioSize: audioData?.byteLength,
       });
-      onSendMessage(message.trim(), files.length > 0 ? files : undefined, audioData || undefined);
+      
+      try {
+        onSendMessage(messageToSend, files.length > 0 ? files : undefined, audioData || undefined);
+        console.log('✅ onSendMessage called successfully');
+      } catch (error) {
+        console.error('❌ Error calling onSendMessage:', error);
+      }
+      
       setMessage('');
       setAttachments([]);
       clearAudioData();
+    } else {
+      console.warn('⚠️ handleSend: No content to send (message empty, no attachments, no audio)');
     }
   };
 
@@ -154,63 +194,54 @@ export const ChatInput = ({ onSendMessage, isLoading, onUserActivity, resetToIdl
     }
   };
 
-  const handleHandsFreeToggle = async (enabled: boolean) => {
-    setHandsFreeMode(enabled);
-    toggleVAD(enabled);
-    
-    if (enabled && !isRecording) {
-      // Start recording in hands-free mode
-      try {
-        await startRecording(true);
-        console.log('🎙️ Hands-free mode activated - speak naturally');
-      } catch (error) {
-        console.error('Failed to start hands-free mode:', error);
-        setHandsFreeMode(false);
-      }
-    } else if (!enabled && isRecording) {
-      // Stop recording when disabling hands-free mode
-      await stopRecording();
-    }
-  };
-
   return (
     <div className="p-4 border-t border-border bg-metallic-dark/80 backdrop-blur-sm">
       {/* Audio Error Display */}
       {audioError && (
-        <div className="mb-2 p-2 bg-destructive/20 border border-destructive/50 rounded-lg text-sm text-destructive">
-          {audioError}
+        <div className="mb-2 p-3 bg-destructive/20 border border-destructive/50 rounded-lg">
+          <div className="flex items-start gap-2">
+            <div className="flex-shrink-0 mt-0.5">
+              <X className="w-4 h-4 text-destructive" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-destructive mb-1">
+                {audioError}
+              </p>
+              {audioError.toLowerCase().includes('permission') && (
+                <div className="text-xs text-destructive/80 space-y-1">
+                  <p className="font-medium">How to fix:</p>
+                  <ol className="list-decimal list-inside space-y-0.5 ml-2">
+                    <li>Click the lock icon (🔒) in your browser's address bar</li>
+                    <li>Find "Microphone" in the permissions list</li>
+                    <li>Change it from "Block" to "Allow"</li>
+                    <li>Refresh the page and try again</li>
+                  </ol>
+                  <p className="mt-1 text-destructive/70">
+                    Alternatively, check your system settings to ensure microphone access is enabled for your browser.
+                  </p>
+                </div>
+              )}
+              {audioError.toLowerCase().includes('not found') && (
+                <p className="text-xs text-destructive/80 mt-1">
+                  Please connect a microphone to your device and try again.
+                </p>
+              )}
+              {audioError.toLowerCase().includes('already in use') && (
+                <p className="text-xs text-destructive/80 mt-1">
+                  Close other applications using your microphone (Zoom, Teams, etc.) and try again.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={clearAudioData}
+              className="flex-shrink-0 text-destructive/70 hover:text-destructive transition-colors"
+              title="Dismiss error"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
-
-      {/* Hands-Free Mode Toggle */}
-      <div className="mb-2 flex items-center justify-between p-2 bg-metallic-mid/50 border border-border rounded-lg">
-        <div className="flex items-center gap-2">
-          <Label htmlFor="hands-free" className="text-sm font-body cursor-pointer">
-            Hands-Free Mode
-          </Label>
-          <Switch
-            id="hands-free"
-            checked={handsFreeMode}
-            onCheckedChange={handleHandsFreeToggle}
-            disabled={isLoading}
-          />
-        </div>
-        {vadEnabled && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {speechActive ? (
-              <>
-                <Volume2 className="w-3 h-3 text-accent" />
-                <span className="text-accent">Speaking...</span>
-              </>
-            ) : (
-              <>
-                <VolumeX className="w-3 h-3" />
-                <span>Listening...</span>
-              </>
-            )}
-          </div>
-        )}
-      </div>
 
       {/* Recording Status Indicator */}
       {isRecording && (
@@ -340,9 +371,20 @@ export const ChatInput = ({ onSendMessage, isLoading, onUserActivity, resetToIdl
         {/* Send Button */}
         <Button
           type="button"
-          onClick={handleSend}
+          onClick={(e) => {
+            console.log('🔴 Send button clicked!', {
+              message: message,
+              messageTrimmed: message.trim(),
+              isLoading,
+              hasAttachments: attachments.length > 0,
+              hasAudio: !!audioData,
+              isDisabled: isLoading || (!message.trim() && attachments.length === 0 && !audioData),
+            });
+            handleSend();
+          }}
           disabled={isLoading || (!message.trim() && attachments.length === 0 && !audioData)}
           className="flex-shrink-0 gradient-stark hover:opacity-90 glow-stark transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={isLoading ? 'Processing...' : (!message.trim() && attachments.length === 0 && !audioData) ? 'Enter a message to send' : 'Send message'}
         >
           <Send className="w-5 h-5" />
         </Button>
