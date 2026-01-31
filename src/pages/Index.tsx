@@ -2,7 +2,7 @@ import { ChatContainer } from '@/components/ChatContainer';
 
 /**
  * Home page – mounts the JARVIS chat interface.
- * ChatContainer is bridged to the N8N webhook via @/api/n8n.
+ * ChatContainer uses WebSocket for real-time communication via websocket-proxy service.
  */
 const Index = () => {
   return (

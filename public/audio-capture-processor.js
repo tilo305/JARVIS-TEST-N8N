@@ -6,8 +6,9 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     
-    // Audio buffering
-    this.bufferSize = 48000; // 1 second @ 48kHz
+    // Audio buffering - optimized for low latency streaming
+    // Smaller buffer = more frequent chunks = lower latency
+    this.bufferSize = 9600; // 200ms @ 48kHz (optimal for real-time streaming)
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
     this.isCapturing = false;
@@ -121,10 +122,11 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     }
     
     // Buffer audio data for processing
+    // For optimal latency, send chunks frequently (every 200ms)
     if (this.isCapturing) {
       for (let i = 0; i < inputChannel.length; i++) {
         if (this.bufferIndex >= this.bufferSize) {
-          // Buffer full, send data
+          // Buffer full, send data immediately for real-time streaming
           this.sendAudioData();
           this.bufferIndex = 0;
         }

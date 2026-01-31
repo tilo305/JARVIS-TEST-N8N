@@ -16,102 +16,13 @@
     <meta name="twitter:site" content="@Lovable" />
     <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
     
-    <!-- Early fetch shim to avoid noisy debug ingest errors before app boot -->
-    <script>
-      (function () {
-        const debugIngestUrl = "%VITE_DEBUG_INGEST_URL%";
-        const isPlaceholder = debugIngestUrl.includes("%VITE_");
-        const enabled = debugIngestUrl && !isPlaceholder;
-        if (enabled) return;
+    <!-- Preconnect to Google Fonts for faster loading -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&display=swap">
 
-        const originalFetch = window.fetch.bind(window);
-        window.fetch = (input, init) => {
-          const url =
-            typeof input === "string"
-              ? input
-              : input instanceof Request
-                ? input.url
-                : String(input);
-          if (url.startsWith("http://127.0.0.1:7242/ingest/")) {
-            return Promise.resolve(new Response(null, { status: 204 }));
-          }
-          return originalFetch(input, init);
-        };
-      })();
-    </script>
-
-    <!-- Favicon to prevent 404 errors -->
+    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
-    <link rel="shortcut icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
-    
-    <!-- Remove unwanted preload tags injected by browser extensions -->
-    <script>
-      (function() {
-        // Remove preload tags from external domains that aren't needed
-        const unwantedDomains = ['apps.rokt.com'];
-        
-        function removeUnwantedPreloads() {
-          const links = document.querySelectorAll('link[rel="preload"]');
-          links.forEach(link => {
-            const href = link.getAttribute('href');
-            if (href && unwantedDomains.some(domain => href.includes(domain))) {
-              // Silently remove - don't log to reduce console noise
-              link.remove();
-            }
-          });
-          
-          // Also remove any favicon links from external domains that might cause 404s
-          const favicons = document.querySelectorAll('link[rel*="icon"]');
-          favicons.forEach(link => {
-            const href = link.getAttribute('href');
-            if (href && (href.includes('gstatic.com') || href.includes('google') || href.includes('favicon'))) {
-              // Only remove if it's trying to load from external domain through localhost
-              if (href.includes('127.0.0.1') || href.includes('localhost')) {
-                link.remove();
-              }
-            }
-          });
-        }
-        
-        // Remove existing preload tags immediately
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', removeUnwantedPreloads);
-        } else {
-          removeUnwantedPreloads();
-        }
-        
-        // Monitor for dynamically added preload tags
-        const observer = new MutationObserver(mutations => {
-          mutations.forEach(mutation => {
-            mutation.addedNodes.forEach(node => {
-              if (node.nodeType === 1 && node.tagName === 'LINK') {
-                const rel = node.getAttribute('rel');
-                const href = node.getAttribute('href');
-                if (rel === 'preload' && href && unwantedDomains.some(domain => href.includes(domain))) {
-                  // Silently remove - don't log to reduce console noise
-                  node.remove();
-                }
-                // Also remove problematic favicon links
-                if (rel && rel.includes('icon') && href && (href.includes('gstatic.com') || href.includes('google'))) {
-                  if (href.includes('127.0.0.1') || href.includes('localhost')) {
-                    node.remove();
-                  }
-                }
-              }
-            });
-          });
-        });
-        
-        // Start observing as soon as head is available
-        if (document.head) {
-          observer.observe(document.head, { childList: true, subtree: true });
-        } else {
-          document.addEventListener('DOMContentLoaded', () => {
-            observer.observe(document.head, { childList: true, subtree: true });
-          });
-        }
-      })();
-    </script>
   </head>
 
   <body>

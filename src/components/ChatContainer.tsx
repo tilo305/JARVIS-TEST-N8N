@@ -1,11 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { ChatHeader } from './ChatHeader';
 import { ChatMessage, Message } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useTextToSpeech } from '@/hooks/useTextToSpeech';
-import { sendToN8N, normalizeN8NResponse, extractAudioFromResponse, extractTranscriptFromResponse } from '@/api/n8n';
-import { fetchCartesiaTts } from '@/api/cartesia';
+import { useWebSocketVoice } from '@/hooks/useWebSocketVoice';
 import type { ConversationStatus } from '@/types/chat';
 
 /** Voice Bot Design S2/S11: Short, clear status and conversational loading text. */
@@ -20,7 +19,7 @@ const FRIENDLY_ERROR_PHRASES = [
 // Demo messages for initial state
 const initialMessages: Message[] = [
   {
-    id: '1',
+    id: crypto.randomUUID(),
     content: 'Good evening, sir. I am J.A.R.V.I.S., your personal AI assistant. Speak or type to chat—I support voice in and out. How may I assist you today?',
     role: 'assistant',
     timestamp: new Date(Date.now() - 60000),
@@ -45,10 +44,167 @@ export const ChatContainer = () => {
   const sessionIdRef = useRef<string>(crypto.randomUUID());
   const { speak, stop: stopTts } = useTextToSpeech({ lang: 'en-GB' });
   const [stopPlaybackToken, setStopPlaybackToken] = useState(0);
+  
+  // WebSocket hook for voice communication
+  const currentTranscriptRef = useRef<string>('');
+  const currentUserMessageIdRef = useRef<string | null>(null);
+  const currentAssistantMessageIdRef = useRef<string | null>(null);
+  const waitingForAssistantRef = useRef<boolean>(false);
+  
+  const {
+    isConnected: isWebSocketConnected,
+    isConnecting: isWebSocketConnecting,
+    connect: connectWebSocket,
+    disconnect: disconnectWebSocket,
+    sendAudioChunk,
+    endAudio,
+    sendText,
+    cancel: cancelWebSocket
+  } = useWebSocketVoice({
+    sessionId: sessionIdRef.current,
+    onTranscript: (text, isPartial) => {
+      // Ensure text is a string
+      const transcriptText = text || '';
+      
+      if (isPartial) {
+        // Partial transcript - always user input (STT)
+        if (currentUserMessageIdRef.current) {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === currentUserMessageIdRef.current
+                ? { ...msg, content: transcriptText || '🎤 Transcribing...' }
+                : msg
+            )
+          );
+        }
+        currentTranscriptRef.current = transcriptText;
+      } else {
+        // Final transcript - could be user (STT final) or assistant (N8N response)
+        if (waitingForAssistantRef.current && currentAssistantMessageIdRef.current) {
+          // This is the assistant response from N8N
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === currentAssistantMessageIdRef.current
+                ? { ...msg, content: transcriptText }
+                : msg
+            )
+          );
+          waitingForAssistantRef.current = false;
+          setIsLoading(false);
+          setConversationStatus('idle');
+        } else if (currentUserMessageIdRef.current) {
+          // This is the final user transcript (STT)
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === currentUserMessageIdRef.current
+                ? { ...msg, content: transcriptText }
+                : msg
+            )
+          );
+          currentTranscriptRef.current = transcriptText;
+          // Now we're waiting for assistant response
+          waitingForAssistantRef.current = true;
+        }
+      }
+    },
+    onAudioChunk: (audioData) => {
+      // Audio chunks are handled by the WebSocket hook internally
+      // We can add additional handling here if needed
+    },
+    onError: (error) => {
+      // Ensure error is a string
+      const errorMessage = error || 'Unknown WebSocket error';
+      
+      // Only log if it's not a connection timeout (those are handled by the hook)
+      if (typeof errorMessage === 'string' && 
+          !errorMessage.includes('timeout') && 
+          !errorMessage.includes('connection failed after multiple attempts')) {
+        console.error('WebSocket error:', errorMessage);
+      }
+      
+      // Only show toast for non-reconnection errors to avoid spam
+      if (typeof errorMessage === 'string' && 
+          !errorMessage.includes('connection failed after multiple attempts')) {
+        toast.error('Connection error', {
+          description: errorMessage,
+          duration: 5000,
+        });
+      }
+      
+      // Only add error message if we're actually in a loading state
+      // This prevents duplicate error messages from reconnection attempts
+      if (isLoading || waitingForAssistantRef.current) {
+        const errorMsg: Message = {
+          id: crypto.randomUUID(),
+          content: FRIENDLY_ERROR_PHRASES[errorPhraseIndexRef.current++ % FRIENDLY_ERROR_PHRASES.length],
+          role: 'assistant',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        setIsLoading(false);
+        setConversationStatus('idle');
+        waitingForAssistantRef.current = false;
+      }
+    }
+  });
+  
+  // Connect WebSocket on mount - with timeout to prevent hanging
+  // Use refs to avoid dependency issues that cause reconnection loops
+  const connectWebSocketRef = useRef(connectWebSocket);
+  const disconnectWebSocketRef = useRef(disconnectWebSocket);
+  
+  // Update refs when functions change (but don't trigger re-run)
+  useEffect(() => {
+    connectWebSocketRef.current = connectWebSocket;
+    disconnectWebSocketRef.current = disconnectWebSocket;
+  }, [connectWebSocket, disconnectWebSocket]);
+  
+  useEffect(() => {
+    // Delay connection slightly to ensure component is fully mounted
+    const connectTimer = setTimeout(() => {
+      connectWebSocketRef.current().catch((error) => {
+        // WebSocket connection is optional - don't block page load
+        console.warn('WebSocket connection failed (this is optional):', error);
+      });
+    }, 100);
+    
+    return () => {
+      clearTimeout(connectTimer);
+      // Only disconnect on unmount, not on every render
+      disconnectWebSocketRef.current();
+    };
+    // Empty deps - only run on mount/unmount
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  // Safeguard: Ensure all messages have unique IDs and filter out any duplicates
+  const uniqueMessages = useMemo(() => {
+    const seen = new Set<string>();
+    const unique: Message[] = [];
+    for (const msg of messages) {
+      // Ensure message has a valid UUID-style ID, regenerate if it looks like a timestamp
+      let msgId = msg.id;
+      let messageToAdd = msg;
+      
+      if (!msgId || /^\d+$/.test(msgId)) {
+        // If ID is missing or looks like a timestamp (all digits), regenerate it
+        console.warn(`⚠️ Message with invalid/timestamp ID detected: ${msgId}, regenerating UUID`);
+        msgId = crypto.randomUUID();
+        messageToAdd = { ...msg, id: msgId };
+      }
+      
+      if (!seen.has(msgId)) {
+        seen.add(msgId);
+        unique.push(messageToAdd);
+      } else {
+        console.warn(`⚠️ Duplicate message ID detected: ${msgId}, skipping duplicate`);
+      }
+    }
+    return unique;
+  }, [messages]);
 
   useEffect(() => {
     scrollToBottom();
@@ -65,12 +221,33 @@ export const ChatContainer = () => {
       hasAttachments: !!attachments?.length,
       hasAudio: !!audioData,
       audioSize: audioData?.byteLength,
+      isWebSocketConnected,
     });
 
-    const userMessageId = Date.now().toString();
+    // Validate that we have something to send
+    const hasContent = content && content.trim().length > 0;
+    const hasAttachments = attachments && attachments.length > 0;
+    const hasAudio = !!audioData;
+    
+    if (!hasContent && !hasAttachments && !hasAudio) {
+      console.warn('⚠️ handleSendMessage: No content to send');
+      return;
+    }
+
+    if (!isWebSocketConnected) {
+      toast.error('Not connected', {
+        description: 'WebSocket is not connected. Please wait for connection.',
+        duration: 5000,
+      });
+      return;
+    }
+
+    const userMessageId = crypto.randomUUID();
+    currentUserMessageIdRef.current = userMessageId;
+    
     const userMessage: Message = {
       id: userMessageId,
-      content: content || (audioData ? '🎤 Transcribing...' : 'Sent files'),
+      content: content?.trim() || (audioData ? '🎤 Transcribing...' : hasAttachments ? 'Sent files' : 'Message'),
       role: 'user',
       timestamp: new Date(),
       attachments: attachments?.map((f) => ({ name: f.name, type: f.type })),
@@ -80,148 +257,62 @@ export const ChatContainer = () => {
     setIsLoading(true);
     setConversationStatus('thinking');
     loadingPhraseIndexRef.current += 1;
-    const controller = new AbortController();
-    sendAbortRef.current = controller;
 
     try {
-      console.log('📤 Calling sendToN8N with:', {
-        content,
-        contentLength: content?.length,
-        attachmentsCount: attachments?.length || 0,
-        hasAudio: !!audioData,
-      });
-      
-      const response = await sendToN8N(content, attachments, audioData, {
-        signal: controller.signal,
-        sessionId: sessionIdRef.current,
-      });
-      
-      console.log('📥 Received response from n8n:', {
-        responseType: typeof response,
-        isString: typeof response === 'string',
-        isObject: typeof response === 'object',
-        responseKeys: typeof response === 'object' && response ? Object.keys(response) : null,
-      });
-      
-      // Validate response
-      if (!response) {
-        throw new Error('Empty response from N8N webhook');
+      if (audioData) {
+        // Audio chunks are already being streamed in real-time via onAudioChunk callback
+        // This audioData is the final accumulated buffer from VAD - just finalize STT
+        // Don't resend chunks that were already streamed for optimal latency
+        endAudio();
+      } else if (hasContent) {
+        // Send text via WebSocket
+        sendText(content.trim());
+      } else if (hasAttachments) {
+        // For attachments, we might want to send a notification or handle differently
+        // For now, just create the assistant placeholder
+        console.log('📎 Sending attachments via WebSocket (if supported)');
       }
       
-      // Extract transcription if audio was sent
-      const transcript = audioData ? extractTranscriptFromResponse(response) : null;
+      // Create assistant message placeholder - will be updated by WebSocket callbacks
+      const assistantMessageId = crypto.randomUUID();
+      currentAssistantMessageIdRef.current = assistantMessageId;
+      waitingForAssistantRef.current = true;
       
-      // Update user message with transcription if available
-      if (transcript) {
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === userMessageId
-              ? { ...msg, content: transcript }
-              : msg
-          )
-        );
-      } else if (audioData && !content) {
-        // If no transcript was returned, show a fallback message
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === userMessageId
-              ? { ...msg, content: '🎤 Voice message (transcription unavailable)' }
-              : msg
-          )
-        );
-      }
-      
-      const responseMessage = normalizeN8NResponse(response);
-      const audioUrl = extractAudioFromResponse(response) ?? undefined;
-
       const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: responseMessage,
+        id: assistantMessageId,
+        content: LOADING_PHRASES[loadingPhraseIndexRef.current % LOADING_PHRASES.length],
         role: 'assistant',
         timestamp: new Date(),
-        audioUrl,
       };
 
-      // Reset stop token BEFORE adding message so it's ready when message renders
       setStopPlaybackToken(0);
       setMessages((prev) => [...prev, assistantMessage]);
       
-      if (audioUrl) {
-        console.log('✅ Assistant message with audio added:', { audioUrl: audioUrl.substring(0, 50) + '...' });
-      } else {
-        console.warn('⚠️ Assistant message added but no audioUrl');
-      }
+      // Note: Transcript and audio will be updated via WebSocket callbacks
+      // The WebSocket hook handles audio playback internally
     } catch (error) {
-      console.error('Error sending message to N8N:', error);
+      console.error('Error sending message via WebSocket:', error);
       
-      // S16: Friendly, non-blaming error copy; vary wording on re-prompts
       const friendlyPhrase = FRIENDLY_ERROR_PHRASES[errorPhraseIndexRef.current++ % FRIENDLY_ERROR_PHRASES.length];
-      let errorMessage = friendlyPhrase;
-      let toastMessage = 'Something went wrong';
-      let toastDescription: string | undefined;
-      
-      if (error instanceof Error) {
-        const errorText = error.message.toLowerCase();
-        
-        if (errorText.includes('cancelled') || errorText.includes('request was cancelled')) {
-          errorMessage = 'Stopped, sir. Say or type whenever you\'re ready.';
-          toastMessage = 'Request cancelled';
-        } else if (errorText.includes('timeout') || errorText.includes('abort')) {
-          errorMessage = `${friendlyPhrase}\n\nThe request took too long—try again in a moment.`;
-          toastMessage = 'Request timeout';
-          toastDescription = 'The N8N webhook did not respond in time. Please try again.';
-        } else if (errorText.includes('404') || errorText.includes('not found')) {
-          if (errorText.includes('test mode') || errorText.includes('Execute workflow')) {
-            errorMessage = `${friendlyPhrase}\n\nIn N8N, open the workflow and click "Execute workflow", then try again.`;
-            toastMessage = 'Workflow needs activation';
-            toastDescription = 'The N8N workflow is in test mode. Click "Execute workflow" in N8N, then try again.';
-          } else {
-            errorMessage = `${friendlyPhrase}\n\nCheck that the webhook URL is correct and the workflow is active.`;
-            toastMessage = 'Webhook not found';
-            toastDescription = 'The configured N8N webhook URL is invalid or the workflow is not active.';
-          }
-        } else if (errorText.includes('401') || errorText.includes('403') || errorText.includes('unauthorized')) {
-          errorMessage = `${friendlyPhrase}\n\nCheck webhook authentication.`;
-          toastMessage = 'Authentication failed';
-          toastDescription = 'The N8N webhook requires authentication. Please verify your credentials.';
-        } else if (errorText.includes('500') || errorText.includes('server error')) {
-          errorMessage = `${friendlyPhrase}\n\nThe workflow had an issue—try again in a moment.`;
-          toastMessage = 'Server error';
-          toastDescription = 'The N8N workflow returned an error. Please try again.';
-        } else if (errorText.includes('cors')) {
-          errorMessage = `${friendlyPhrase}\n\nThe server needs to allow requests from this app (CORS).`;
-          toastMessage = 'CORS error';
-          toastDescription = 'The n8n server needs CORS headers configured. See console for details.';
-        } else if (errorText.includes('network') || errorText.includes('fetch')) {
-          errorMessage = `${friendlyPhrase}\n\nCheck your internet connection.`;
-          toastMessage = 'Network error';
-          toastDescription = 'Unable to connect to the N8N webhook. Check your connection.';
-        } else {
-          toastDescription = error.message;
-        }
-      }
-      
-      toast.error(toastMessage, {
-        description: toastDescription,
-        duration: 5000,
-      });
-
       const errorMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        content: errorMessage,
+        id: crypto.randomUUID(),
+        content: friendlyPhrase,
         role: 'assistant',
         timestamp: new Date(),
       };
 
+      toast.error('Error', {
+        description: error instanceof Error ? error.message : 'Failed to send message',
+        duration: 5000,
+      });
+
       setMessages((prev) => [...prev, errorMsg]);
-    } finally {
       setIsLoading(false);
-      sendAbortRef.current = null;
-      setConversationStatus((prev) => (prev === 'thinking' ? 'idle' : prev));
+      setConversationStatus('idle');
     }
   };
 
-  const startInactivityTimer = () => {
+  const startInactivityTimer = useCallback(() => {
     // Clear any existing timer
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
@@ -232,7 +323,7 @@ export const ChatContainer = () => {
       console.log('⏰ 10 seconds of silence after assistant response - sending "still here" message');
       
       const stillHereMessage: Message = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         content: STILL_HERE_TEXT,
         role: 'assistant',
         timestamp: new Date(),
@@ -243,19 +334,8 @@ export const ChatContainer = () => {
       // Reset stop token so "still here" message can play
       setStopPlaybackToken(0);
 
-      // Use Cartesia TTS (same voice ID as N8N) when API key is set; otherwise browser TTS
-      fetchCartesiaTts(STILL_HERE_TEXT).then((buf) => {
-        if (buf) {
-          const url = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }));
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === stillHereMessage.id ? { ...m, audioUrl: url } : m
-            )
-          );
-        } else {
-          speak(STILL_HERE_TEXT, stillHereMessage.id);
-        }
-      });
+      // Use browser TTS for "still here" message
+      speak(STILL_HERE_TEXT, stillHereMessage.id);
 
       // Clear ref so we don't restart the timer; agent responds only once after silence
       inactivityTimerRef.current = null;
@@ -264,7 +344,7 @@ export const ChatContainer = () => {
       setResetToIdle(true);
       setTimeout(() => setResetToIdle(false), 100); // Reset flag after triggering
     }, 10000); // 10 seconds
-  };
+  }, [setMessages, setStopPlaybackToken, speak, setResetToIdle]);
 
   const cancelInactivityTimer = () => {
     if (inactivityTimerRef.current) {
@@ -297,7 +377,10 @@ export const ChatContainer = () => {
       // Only start timer if assistant just finished responding (not the "still here" prompt)
       if (lastMessage && lastMessage.role === 'assistant' && !lastMessage.isInactivityPrompt) {
         // Check if this is a new assistant message (not the initial one)
-        const isNewAssistantMessage = lastMessage.id !== initialMessages[0].id;
+        // Safely check initialMessages array to avoid potential errors
+        const isNewAssistantMessage = initialMessages.length > 0 
+          ? lastMessage.id !== initialMessages[0].id 
+          : true;
         if (isNewAssistantMessage) {
           // Small delay to ensure state is stable
           const timer = setTimeout(() => {
@@ -307,7 +390,7 @@ export const ChatContainer = () => {
         }
       }
     }
-  }, [isLoading, messages]);
+  }, [isLoading, messages, startInactivityTimer]);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -326,7 +409,11 @@ export const ChatContainer = () => {
 
   return (
     <div className="flex flex-col w-[600px] h-[600px] bg-background border border-border rounded-lg shadow-lg overflow-hidden">
-      <ChatHeader conversationStatus={conversationStatus} />
+      <ChatHeader 
+        conversationStatus={conversationStatus}
+        isWebSocketConnected={isWebSocketConnected}
+        isWebSocketConnecting={isWebSocketConnecting}
+      />
       
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2 gradient-metallic relative">
@@ -342,7 +429,7 @@ export const ChatContainer = () => {
           }}
         />
         
-        {messages.map((message) => (
+        {uniqueMessages.map((message) => (
           <ChatMessage
             key={message.id}
             message={message}
@@ -365,7 +452,11 @@ export const ChatContainer = () => {
             {/* S17: Allow users to exit/cancel (escape from waiting) */}
             <button
               type="button"
-              onClick={() => sendAbortRef.current?.abort()}
+              onClick={() => {
+                cancelWebSocket();
+                setIsLoading(false);
+                setConversationStatus('idle');
+              }}
               className="text-sm font-body text-muted-foreground hover:text-foreground underline focus:outline-none focus:ring-2 focus:ring-accent rounded px-2 py-1"
             >
               Cancel
@@ -383,6 +474,16 @@ export const ChatContainer = () => {
         onUserStartsSpeaking={handleUserStartsSpeaking}
         onRecordingStateChange={handleRecordingStateChange}
         resetToIdle={resetToIdle}
+        onAudioChunk={(audioData, format, sampleRate) => {
+          // Real-time streaming: send audio chunks immediately as they're captured
+          // This enables true bidirectional flow with minimal latency
+          // Chunks are sent continuously during recording (not after silence)
+          if (isWebSocketConnected) {
+            sendAudioChunk(audioData, format, sampleRate);
+          } else {
+            console.warn('WebSocket not connected, audio chunk dropped');
+          }
+        }}
       />
     </div>
   );

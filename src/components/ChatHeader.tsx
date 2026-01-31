@@ -1,39 +1,20 @@
-import { useState, useEffect } from 'react';
 import { Zap, Shield, Wifi, WifiOff, Mic, Loader2 } from 'lucide-react';
-import { checkN8NConnection } from '@/api/n8n';
 import { cn } from '@/lib/utils';
 import type { ConversationStatus } from '@/types/chat';
 
 interface ChatHeaderProps {
   /** Voice Bot Design S2: show who has the floor (listening / thinking / idle). */
   conversationStatus?: ConversationStatus;
+  /** WebSocket connection status */
+  isWebSocketConnected?: boolean;
+  isWebSocketConnecting?: boolean;
 }
 
-export const ChatHeader = ({ conversationStatus = 'idle' }: ChatHeaderProps) => {
-  const [isConnected, setIsConnected] = useState<boolean | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
-
-  useEffect(() => {
-    // Check connection on mount
-    const checkConnection = async () => {
-      setIsChecking(true);
-      try {
-        const connected = await checkN8NConnection();
-        setIsConnected(connected);
-      } catch {
-        setIsConnected(false);
-      } finally {
-        setIsChecking(false);
-      }
-    };
-
-    checkConnection();
-
-    // Check connection periodically (every 30 seconds)
-    const interval = setInterval(checkConnection, 30000);
-
-    return () => clearInterval(interval);
-  }, []);
+export const ChatHeader = ({ 
+  conversationStatus = 'idle',
+  isWebSocketConnected = false,
+  isWebSocketConnecting = false
+}: ChatHeaderProps) => {
 
   return (
     <header className="relative p-4 border-b border-border bg-metallic-dark/90 backdrop-blur-sm overflow-hidden">
@@ -94,21 +75,19 @@ export const ChatHeader = ({ conversationStatus = 'idle' }: ChatHeaderProps) => 
           <div
             className={cn(
               "flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all",
-              isConnected === true
+              isWebSocketConnected
                 ? "bg-metallic-mid border-accent/30"
-                : isConnected === false
-                ? "bg-destructive/20 border-destructive/50"
-                : "bg-metallic-mid border-border/50"
+                : "bg-destructive/20 border-destructive/50"
             )}
           >
-            {isChecking ? (
+            {isWebSocketConnecting ? (
               <>
                 <div className="w-2 h-2 rounded-full bg-muted-foreground animate-pulse" />
                 <span className="text-xs font-body text-muted-foreground uppercase tracking-wider">
-                  Checking...
+                  Connecting...
                 </span>
               </>
-            ) : isConnected === true ? (
+            ) : isWebSocketConnected ? (
               <>
                 <Wifi className="w-3 h-3 text-accent" />
                 <span className="text-xs font-body text-accent uppercase tracking-wider">

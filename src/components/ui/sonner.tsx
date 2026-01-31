@@ -1,3 +1,4 @@
+import * as React from "react";
 import { Toaster as Sonner, toast } from "sonner";
 
 type ToasterProps = React.ComponentProps<typeof Sonner>;
@@ -21,4 +22,4 @@ const Toaster = ({ ...props }: ToasterProps) => {
   );
 };
 
-export { Toaster, toast };
+export { Toaster, toast }; // eslint-disable-line react-refresh/only-export-components

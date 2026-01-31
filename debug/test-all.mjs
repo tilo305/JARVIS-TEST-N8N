@@ -21,7 +21,7 @@ console.log('  3. tts-debug.ts - Cartesia TTS testing');
 console.log('  4. index.ts - Main entry point\n');
 
 console.log('💡 To use these tools:');
-console.log('  - In browser: window.jarvisDebug.runAll()');
+console.log('  - In browser: await window.jarvisDebug.master()');
 console.log('  - In code: import from "@/debug"');
 console.log('  - See debug/README.md for details\n');
 
@@ -49,5 +49,5 @@ files.forEach(file => {
 console.log('\n📝 Next Steps:');
 console.log('  1. Start dev server: npm run dev');
 console.log('  2. Open browser console (F12)');
-console.log('  3. Run: window.jarvisDebug.runAll()');
+console.log('  3. Run: await window.jarvisDebug.master()');
 console.log('  4. Check console output for issues\n');

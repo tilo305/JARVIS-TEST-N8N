@@ -5,6 +5,8 @@
  * Usage: Import and call debugTTS() in browser console
  */
 
+import { getCartesiaApiKey } from './utils';
+
 // Dynamic import to avoid build issues
 async function getCartesiaTts() {
   if (typeof window !== 'undefined') {
@@ -40,12 +42,18 @@ export async function debugTTS(text: string = "Hello, this is a test."): Promise
 
   console.group('🔍 Cartesia TTS Debug');
   console.log('Text:', text);
-  console.log('Environment:', import.meta.env.DEV ? 'Development' : 'Production');
+  
+  const metaEnv = typeof import.meta !== "undefined" && 'env' in import.meta
+    ? (import.meta as { env?: Record<string, unknown> }).env
+    : undefined;
+  const isDev = metaEnv?.DEV === true;
+  
+  console.log('Environment:', isDev ? 'Development' : 'Production');
 
   // Check API key
-  const apiKey = import.meta.env.VITE_CARTESIA_API_KEY || import.meta.env.CARTESIA_API_KEY;
+  const apiKey = await getCartesiaApiKey() || (metaEnv?.CARTESIA_API_KEY as string);
   result.apiKeySet = !!apiKey?.trim();
-  result.usingProxy = import.meta.env.DEV;
+  result.usingProxy = isDev;
 
   console.log('API Key Set:', result.apiKeySet);
   console.log('Using Proxy:', result.usingProxy);

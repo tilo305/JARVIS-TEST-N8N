@@ -1,90 +1,34 @@
 /**
- * App config – env-backed, used by API and chat.
- * Optional: set VITE_N8N_WEBHOOK_URL in .env to override the default webhook.
+ * App config – WebSocket version only.
+ * The N8N webhook URL is configured in the websocket-proxy service.
+ * Frontend only needs the WebSocket proxy URL.
  */
 
-const env = import.meta.env;
-const url = env?.VITE_N8N_WEBHOOK_URL;
-const trimmed = typeof url === "string" ? url.trim() : "";
+const metaEnv = typeof import.meta !== "undefined" && 'env' in import.meta
+  ? (import.meta as { env?: Record<string, unknown> }).env
+  : undefined;
+const env = metaEnv || {};
 
-/**
- * Validate that a URL is a valid HTTP/HTTPS URL.
- */
-function isValidWebhookUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-/** Single source of truth: N8N webhook URL. */
-const N8N_WEBHOOK_URL = "https://n8n.hempstarai.com/webhook/170d9a22-bac0-438c-9755-dc79b961d36e";
-
-// Validate the default webhook URL
-if (!isValidWebhookUrl(N8N_WEBHOOK_URL)) {
-  throw new Error(`Invalid default N8N webhook URL: ${N8N_WEBHOOK_URL}`);
-}
-
-const webhookPath = new URL(N8N_WEBHOOK_URL).pathname;
-const defaultWebhook = N8N_WEBHOOK_URL;
-
-// In development, use proxy to avoid CORS issues
-const isDevelopment = import.meta.env.DEV;
-const useProxy = isDevelopment && !trimmed; // Only use proxy if no custom URL is set
-
-// Determine the webhook URL to use
-let webhookUrl: string;
-if (useProxy) {
-  // Use Vite proxy in development
-  webhookUrl = `/api/n8n${webhookPath}`;
-} else if (trimmed) {
-  // Use custom URL from environment variable
-  if (!isValidWebhookUrl(trimmed)) {
-    console.error(`Invalid VITE_N8N_WEBHOOK_URL: ${trimmed}. Using default: ${defaultWebhook}`);
-    webhookUrl = defaultWebhook;
-  } else {
-    webhookUrl = trimmed;
-  }
-} else {
-  // Use default webhook URL
-  webhookUrl = defaultWebhook;
-}
-
-// Final validation
-if (!useProxy && !isValidWebhookUrl(webhookUrl)) {
-  throw new Error(`Invalid webhook URL format: ${webhookUrl}`);
-}
+// WebSocket proxy URL (required for WebSocket version)
+const wsUrl = env?.VITE_WEBSOCKET_PROXY_URL;
+const websocketProxyUrl = typeof wsUrl === "string" ? wsUrl.trim() : undefined;
 
 export const config = {
-  /** N8N webhook URL for JARVIS chat. Uses proxy in development to avoid CORS. */
-  n8nWebhookUrl: webhookUrl,
+  /** WebSocket proxy URL for streaming mode. Required for WebSocket version. */
+  websocketProxyUrl: websocketProxyUrl,
 } as const;
 
-// Log configuration on startup (development only)
+// Log configuration on startup (development only) - defer to avoid blocking
 if (import.meta.env.DEV && !import.meta.env.VITEST) {
-  console.log("🔧 [JARVIS] N8N webhook configuration:", {
-    url: config.n8nWebhookUrl,
-    usingProxy: useProxy,
-    defaultUrl: defaultWebhook,
-    customUrl: trimmed || "none",
-    environment: import.meta.env.MODE,
-  });
-  
-  // Validate webhook URL format (skip validation for relative proxy URLs)
-  if (!useProxy) {
-    try {
-      const url = new URL(config.n8nWebhookUrl);
-      console.log("✅ Webhook URL is valid:", {
-        protocol: url.protocol,
-        host: url.host,
-        pathname: url.pathname,
-      });
-    } catch (error) {
-      console.error("❌ Invalid webhook URL format:", config.n8nWebhookUrl);
+  // Use setTimeout to ensure logging doesn't block initialization
+  setTimeout(() => {
+    console.log("🔧 [JARVIS] WebSocket configuration:", {
+      websocketProxyUrl: config.websocketProxyUrl || "not set",
+      environment: import.meta.env.MODE,
+    });
+    
+    if (!config.websocketProxyUrl) {
+      console.warn("⚠️ VITE_WEBSOCKET_PROXY_URL is not set. WebSocket connection will fail.");
     }
-  } else {
-    console.log("✅ Using proxy URL (relative):", config.n8nWebhookUrl);
-  }
+  }, 0);
 }

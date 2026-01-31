@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, MicOff, Send, Paperclip, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { useAudioRecorder } from '@/hooks/useAudioRecorder';
+import { useAudioRecorder, type AudioChunkCallback } from '@/hooks/useAudioRecorder';
 
 interface FileAttachment {
   file: File;
@@ -19,6 +19,8 @@ interface ChatInputProps {
   /** Voice Bot Design S2: report recording state so parent can show "Listening" status. */
   onRecordingStateChange?: (isRecording: boolean) => void;
   resetToIdle?: boolean;
+  /** Real-time audio streaming callback for optimal latency */
+  onAudioChunk?: AudioChunkCallback;
 }
 
 export const ChatInput = ({
@@ -28,12 +30,22 @@ export const ChatInput = ({
   onUserStartsSpeaking,
   onRecordingStateChange,
   resetToIdle,
+  onAudioChunk,
 }: ChatInputProps) => {
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [handsFreeMode, setHandsFreeMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Real-time audio streaming callback - sends chunks immediately for optimal latency
+  const onAudioChunkRef = useRef<AudioChunkCallback | null>(null);
+  useEffect(() => {
+    onAudioChunkRef.current = onAudioChunk || null;
+    return () => {
+      onAudioChunkRef.current = null;
+    };
+  }, [onAudioChunk]);
+
   const {
     isRecording,
     audioData,
@@ -42,11 +54,19 @@ export const ChatInput = ({
     startRecording,
     stopRecording,
     clearAudioData,
-  } = useAudioRecorder({
-    silenceThreshold: 0.01,
-    silenceDuration: 2500,
-    minSpeechDuration: 300,
-  });
+  } = useAudioRecorder(
+    {
+      silenceThreshold: 0.01,
+      silenceDuration: 2500,
+      minSpeechDuration: 300,
+    },
+    // Real-time streaming callback - streams chunks immediately as captured
+    (audioData, format, sampleRate) => {
+      if (onAudioChunkRef.current) {
+        onAudioChunkRef.current(audioData, format, sampleRate);
+      }
+    }
+  );
 
   const prevRecordingRef = useRef(false);
   const prevSpeechRef = useRef(false);
@@ -196,15 +216,15 @@ export const ChatInput = ({
 
   return (
     <div className="p-4 border-t border-border bg-metallic-dark/80 backdrop-blur-sm">
-      {/* Audio Error Display */}
+      {/* Audio Error Display - Following Voice Bot Design Principles */}
       {audioError && (
-        <div className="mb-2 p-3 bg-destructive/20 border border-destructive/50 rounded-lg">
+        <div className="mb-2 p-3 bg-destructive/20 border border-destructive/50 rounded-lg animate-in fade-in slide-in-from-top-2 duration-300">
           <div className="flex items-start gap-2">
             <div className="flex-shrink-0 mt-0.5">
               <X className="w-4 h-4 text-destructive" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-medium text-destructive mb-1">
+              <p className="text-sm font-medium text-destructive mb-2">
                 {audioError}
               </p>
               {audioError.toLowerCase().includes('permission') && (
@@ -221,7 +241,11 @@ export const ChatInput = ({
                   </p>
                 </div>
               )}
-              {audioError.toLowerCase().includes('not found') && (
+              {audioError.toLowerCase().includes('not found') && 
+               !audioError.toLowerCase().includes('audioworklet') && 
+               !audioError.toLowerCase().includes("couldn't find") && 
+               !audioError.toLowerCase().includes('processor') && 
+               !audioError.toLowerCase().includes('file') && (
                 <p className="text-xs text-destructive/80 mt-1">
                   Please connect a microphone to your device and try again.
                 </p>
@@ -231,6 +255,64 @@ export const ChatInput = ({
                   Close other applications using your microphone (Zoom, Teams, etc.) and try again.
                 </p>
               )}
+              {/* Recovery Actions - Following Heuristic #17: Allow Users to Exit from Errors */}
+              <div className="flex gap-2 mt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    clearAudioData();
+                    // Auto-retry after clearing error (following Error Prevention principles)
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 100);
+                  }}
+                  className="text-xs h-7"
+                >
+                  Refresh Page
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearAudioData}
+                  className="text-xs h-7 text-destructive/70 hover:text-destructive"
+                >
+                  Dismiss
+                </Button>
+              </div>
+              
+              {/* Contextual Help - Following Heuristic #16: Use Normal Language */}
+              {audioError.toLowerCase().includes('audioworklet') || 
+               audioError.toLowerCase().includes("couldn't") || 
+               audioError.toLowerCase().includes("can't") ? (
+                <div className="text-xs text-destructive/80 space-y-1 mt-2 pt-2 border-t border-destructive/20">
+                  <p className="font-medium">Quick fixes to try:</p>
+                  <ul className="list-disc list-inside space-y-0.5 ml-2">
+                    {audioError.toLowerCase().includes('not found') || audioError.toLowerCase().includes("couldn't find") ? (
+                      <>
+                        <li>Make sure the development server is running</li>
+                        <li>Try refreshing the page</li>
+                      </>
+                    ) : audioError.toLowerCase().includes('not supported') || audioError.toLowerCase().includes("doesn't support") ? (
+                      <>
+                        <li>Update your browser to the latest version</li>
+                        <li>Try Chrome, Firefox, Edge, or Safari</li>
+                      </>
+                    ) : audioError.toLowerCase().includes('secure') || audioError.toLowerCase().includes("isn't secure") ? (
+                      <>
+                        <li>Use HTTPS or access via localhost</li>
+                        <li>Check the address bar for the connection type</li>
+                      </>
+                    ) : (
+                      <>
+                        <li>Refresh the page (this usually fixes it)</li>
+                        <li>Check that your browser supports voice features</li>
+                        <li>Make sure the server is running</li>
+                      </>
+                    )}
+                  </ul>
+                </div>
+              ) : null}
             </div>
             <button
               onClick={clearAudioData}

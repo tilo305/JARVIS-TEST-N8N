@@ -9,8 +9,11 @@ Comprehensive live debugging tools for JARVIS Voice AI development and troublesh
 Open browser DevTools (F12) and use:
 
 ```javascript
-// Run all debug checks
-window.jarvisDebug.runAll()
+// Comprehensive system check (recommended)
+await window.jarvisDebug.master()
+
+// Quick health check
+await window.jarvisDebug.quickHealth()
 
 // Individual checks
 window.jarvisDebug.audio()      // Check audio playback
@@ -28,7 +31,54 @@ import {
 } from '@/debug';
 ```
 
+## 🚀 Quick Start
+
+### Master Debug (Recommended)
+
+```javascript
+// Comprehensive check of all systems
+await window.jarvisDebug.master()
+```
+
+### Quick Health Check
+
+```javascript
+// Fast health check
+await window.jarvisDebug.quickHealth()
+```
+
 ## 📁 Tools
+
+### Master Debug Tool
+
+**`master-debug.ts`** - Comprehensive system-wide diagnostics
+- Checks all 9 systems in one run
+- Provides overall health status
+- Lists critical issues and recommendations
+
+### New Comprehensive Tools
+
+**`websocket-debug.ts`** - WebSocket connection debugging
+- Tests proxy server connectivity
+- Measures connection latency
+- Monitors connection state
+
+**`audio-recording-debug.ts`** - Audio recording debugging
+- Checks microphone permissions
+- Tests AudioContext and AudioWorklet
+- Validates audio format requirements
+
+**`stt-debug.ts`** - Speech-to-Text debugging
+- Checks Cartesia API key
+- Tests STT WebSocket connection
+- Validates audio format
+
+**`audioworklet-debug.ts`** - AudioWorklet debugging
+- Checks secure context
+- Tests AudioWorklet API support
+- Validates module loading
+
+### Core Tools
 
 ### 1. Audio Playback Debug (`audio-playback-debug.ts`)
 
@@ -106,6 +156,59 @@ console.log('TTS result:', result.success ? 'OK' : 'FAILED');
 await testTTSVariations();
 ```
 
+### 4. Site Loading Debug (`site-loading-debug.ts`)
+
+**Purpose:** Comprehensive diagnostics for site loading issues
+
+**Features:**
+- 12 comprehensive async checks
+- DOM readiness, React imports, module resolution
+- CSS loading, network requests, build artifacts
+- Browser compatibility, environment variables
+
+**Usage:**
+```typescript
+import { debugSiteLoading, monitorSiteLoading, testSiteLoading } from '@/debug/site-loading-debug';
+
+// Comprehensive async diagnostics
+const diagnostics = await debugSiteLoading();
+
+// Quick test
+const passed = await testSiteLoading();
+```
+
+**Note:** Use this for comprehensive, thorough diagnostics. For immediate troubleshooting when the app won't load, use `app-not-loading-live-debugger.ts` instead.
+
+### 5. App Not Loading Debug (`app-not-loading-live-debugger.ts`)
+
+**Purpose:** Quick synchronous diagnostics when app fails to load
+
+**Features:**
+- Immediate synchronous checks (no async operations)
+- Quick diagnosis of critical issues
+- Helper functions to try loading the app
+- Common error pattern detection
+
+**Usage:**
+```typescript
+import { liveDebugAppLoading, tryLoadApp, checkCommonErrors } from '@/debug/app-not-loading-live-debugger';
+
+// Quick synchronous check
+const result = liveDebugAppLoading();
+
+// Try to manually load app
+tryLoadApp();
+
+// Check for common errors
+checkCommonErrors();
+```
+
+**Note:** Use this for immediate troubleshooting when the app won't load. For comprehensive diagnostics, use `site-loading-debug.ts` instead.
+
+**Difference from Site Loading Debug:**
+- `site-loading-debug.ts`: Comprehensive async diagnostics (12 checks, thorough)
+- `app-not-loading-live-debugger.ts`: Quick sync diagnostics (immediate troubleshooting)
+
 ## 🔍 Common Issues & Solutions
 
 ### Audio Not Playing
@@ -178,7 +281,15 @@ Debug tools are automatically loaded in development mode. They're available glob
 2. Export debug functions
 3. Add to `debug/index.ts` exports
 4. Add to `window.jarvisDebug` if needed
-5. Document in this README
+5. Document in this README and `COMPREHENSIVE_DEBUG_SYSTEM.md`
+
+## 📚 Complete Documentation
+
+See `COMPREHENSIVE_DEBUG_SYSTEM.md` for:
+- Complete tool reference
+- Usage examples
+- Common issues & solutions
+- Integration guide
 
 ## 🔗 Related Documentation
 
