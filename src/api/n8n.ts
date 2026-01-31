@@ -13,18 +13,21 @@ export async function checkN8NConnection(): Promise<boolean> {
   }
 
   try {
-    console.log("🔍 Checking N8N webhook connection:", config.n8nWebhookUrl);
+    const isProxyUrl = config.n8nWebhookUrl.startsWith("/api/n8n/");
+    const healthUrl = isProxyUrl
+      ? "/api/n8n/"
+      : `${new URL(config.n8nWebhookUrl).origin}/`;
+
+    console.log("🔍 Checking N8N connection:", healthUrl);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout for health check
     
-    // Try a minimal POST request (OPTIONS often fails due to CORS)
-    const res = await fetch(config.n8nWebhookUrl, {
-      method: "POST",
+    // Use GET against the N8N base URL (avoid 404s from POST-only webhook endpoints).
+    const res = await fetch(healthUrl, {
+      method: "GET",
       headers: { 
-        "Content-Type": "application/json",
         "Accept": "application/json, text/plain, */*",
       },
-      body: JSON.stringify({ message: "health_check", timestamp: new Date().toISOString() }),
       signal: controller.signal,
     });
     
@@ -68,6 +71,26 @@ export type N8NIntent = "booker" | "info" | "general";
 
 export interface N8NSendPayload {
   message: string;
+  /** Alternate text fields used by some n8n templates/workflows. */
+  text?: string;
+  input?: string;
+  prompt?: string;
+  query?: string;
+  userMessage?: string;
+  user_message?: string;
+  /**
+   * Compatibility shim for workflows that read from $json.body.message
+   * even when the webhook node returns the raw body.
+   */
+  body?: {
+    message: string;
+    text: string;
+    input: string;
+    prompt: string;
+    query: string;
+    userMessage: string;
+    user_message: string;
+  };
   timestamp: string;
   /** Optional intent (Routing pattern). When set, n8n can branch without an LLM classifier. */
   intent?: N8NIntent;
@@ -97,12 +120,88 @@ export interface N8NResponse {
   response?: string;
   text?: string;
   content?: string;
+  result?: string;
+  output?: string;
+  answer?: string;
   /** Transcription of user's audio input (from STT). */
   transcript?: string;
   userMessage?: string;
   /** TTS audio from N8N: url (optional) or base64 data + format. */
   audio?: N8NAudio;
   [key: string]: unknown;
+}
+
+type N8NResponseLike = N8NResponse | string;
+
+/**
+ * Normalize common n8n webhook response shapes to a single object or string.
+ * Handles arrays and item wrappers like { json: {...} }.
+ */
+function unwrapN8NResponse(raw: unknown): N8NResponseLike | null {
+  if (typeof raw === "string") return raw;
+  if (!raw || typeof raw !== "object") return null;
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return null;
+    return unwrapN8NResponse(raw[0]);
+  }
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.data) && obj.data.length > 0) {
+    return unwrapN8NResponse(obj.data[0]);
+  }
+  if (Array.isArray(obj.items) && obj.items.length > 0) {
+    return unwrapN8NResponse(obj.items[0]);
+  }
+  if (obj.json && typeof obj.json === "object") {
+    return obj.json as N8NResponse;
+  }
+  if (obj.body && typeof obj.body === "object") {
+    return obj.body as N8NResponse;
+  }
+  return obj as N8NResponse;
+}
+
+function extractResponseText(raw: N8NResponse | string): string {
+  const resolved = unwrapN8NResponse(raw);
+  if (typeof resolved === "string") return resolved;
+  if (!resolved || typeof resolved !== "object") return "";
+  return (
+    (resolved.message as string) ??
+    (resolved.response as string) ??
+    (resolved.text as string) ??
+    (resolved.content as string) ??
+    (resolved.result as string) ??
+    (resolved.output as string) ??
+    (resolved.answer as string) ??
+    ""
+  );
+}
+
+function responseIndicatesEmptyInput(raw: N8NResponse | string): boolean {
+  const text = extractResponseText(raw).trim();
+  if (!text) return false;
+  const normalized = text.toLowerCase().replace(/\u2019/g, "'");
+  return (
+    normalized.includes("not seeing any usable content") ||
+    normalized.includes("message is empty") ||
+    normalized.includes("message empty") ||
+    normalized.includes("please try sending the actual text") ||
+    normalized.includes("isn't coming through") ||
+    normalized.includes("message isn't")
+  );
+}
+
+function buildWebhookUrl(baseUrl: string, message: string): string {
+  if (!message) return baseUrl;
+  if (message.length > 500) return baseUrl;
+  try {
+    const url = new URL(baseUrl, window.location.origin);
+    url.searchParams.set("message", message);
+    url.searchParams.set("text", message);
+    url.searchParams.set("input", message);
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -112,6 +211,85 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+async function parseWebhookResponse(
+  res: Response,
+  audioData?: ArrayBuffer
+): Promise<N8NResponse | string> {
+  const contentType = res.headers.get("content-type") || "";
+  const responseText = await res.text();
+
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:336',message:'N8N response received',data:{status:res.status,contentType,responseLength:responseText.length,isEmpty:!responseText||responseText.trim().length===0,preview:responseText.slice(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+
+  console.log('📦 N8N response body:', {
+    length: responseText.length,
+    isEmpty: !responseText || responseText.trim().length === 0,
+    preview: responseText.slice(0, 200),
+    fullText: responseText,
+  });
+
+  // If response is empty, return helpful message (webhook was called; workflow didn't reply)
+  if (!responseText || responseText.trim().length === 0) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:346',message:'Empty N8N response detected',data:{status:res.status,contentType},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    console.warn("⚠️ N8N webhook returned empty response", {
+      status: res.status,
+      contentType,
+      url: config.n8nWebhookUrl,
+      sentAudio: !!audioData,
+      audioSize: audioData?.byteLength,
+    });
+    console.warn(
+      "💡 Webhook was called successfully. The workflow is not returning a response. " +
+      "Ensure: (1) IF node routes text vs voice (e.g. TRUE when $json.body.text or $json.body.message is not empty → text path; FALSE → STT for voice), " +
+      "(2) both paths reach AI → TTS → Build TTS response → Respond to Webhook, " +
+      "(3) Respond to Webhook = First Incoming Item, (4) workflow returns JSON with `message`."
+    );
+    const emptyReply = audioData
+      ? "The workflow received your voice message but returned no reply. Ensure your N8N workflow: (1) IF node sends voice (no text) to the FALSE branch → STT, (2) voice path goes STT → AI → … → Respond to Webhook, (3) returns JSON with `message` (and optionally `transcript`), (4) Respond to Webhook is set to **First Incoming Item**."
+      : "The workflow received your message but returned no reply. Ensure **Respond to Webhook** is set to **First Incoming Item** and the workflow returns JSON `{ message }` (and optionally `transcript` for voice).";
+    return emptyReply;
+  }
+
+  // Try to parse as JSON if content-type suggests JSON or if text looks like JSON
+  const looksLikeJson = responseText.trim().startsWith("{") || responseText.trim().startsWith("[");
+  const isJsonContentType = contentType.includes("application/json");
+
+  if (isJsonContentType || looksLikeJson) {
+    try {
+      const data = JSON.parse(responseText) as N8NResponse | string;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:372',message:'N8N JSON parsed successfully',data:{isObject:typeof data==='object',keys:typeof data==='object'&&data?Object.keys(data):null,hasMessage:typeof data==='object'&&data&&'message' in data,hasAudio:typeof data==='object'&&data&&'audio' in data},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      console.log("N8N response parsed successfully:", typeof data === "object" ? { ...data, audio: data.audio ? "[audio data present]" : undefined } : data);
+      return data;
+    } catch (parseError) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:375',message:'N8N JSON parse failed',data:{contentType,error:parseError instanceof Error?parseError.message:String(parseError),preview:responseText.slice(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      console.error("Failed to parse JSON response from N8N:", {
+        contentType,
+        responsePreview: responseText.slice(0, 200),
+        error: parseError instanceof Error ? parseError.message : String(parseError)
+      });
+      // If JSON parsing fails but we have text, use the text as the message
+      if (responseText.trim().length > 0) {
+        console.warn("Using response text as fallback message");
+        return responseText.trim();
+      }
+      throw new Error(
+        `Invalid JSON response from N8N webhook. Response preview: ${responseText.slice(0, 100)}`
+      );
+    }
+  }
+
+  // Not JSON, use text as-is
+  console.log("N8N returned non-JSON response, using as text");
+  return responseText.trim() || "Processing complete, sir.";
 }
 
 /** Keyword-based intent for Agentic Routing. n8n can branch on $json.body.intent. Exported for tests. */
@@ -150,12 +328,18 @@ export async function sendToN8N(
   audioData?: ArrayBuffer,
   retriesOrOptions: number | SendToN8NOptions = 2
 ): Promise<N8NResponse | string> {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:147',message:'sendToN8N entry',data:{messageLength:message?.length||0,hasAttachments:!!attachments?.length,hasAudio:!!audioData,audioSize:audioData?.byteLength||0,webhookUrl:config.n8nWebhookUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
   const options: SendToN8NOptions =
     typeof retriesOrOptions === "object" ? retriesOrOptions : { retries: retriesOrOptions };
   const retries = options.retries ?? 2;
   const userSignal = options.signal;
   // Validate webhook URL is configured
   if (!config.n8nWebhookUrl || config.n8nWebhookUrl.trim().length === 0) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:159',message:'Webhook URL validation failed',data:{webhookUrl:config.n8nWebhookUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
     throw new Error("N8N webhook URL is not configured. Please check your configuration.");
   }
 
@@ -169,8 +353,29 @@ export async function sendToN8N(
   }
 
   const trimmedMessage = (message ?? "").trim();
+  
+  // Ensure message field is never empty - use a placeholder if only audio/attachments are present
+  // N8N workflows often check for body.message or body.text, so we need a non-empty value
+  // This prevents the N8N workflow from returning "message isn't coming through" errors
+  const finalMessage = trimmedMessage || (audioData ? "🎤 Voice message" : attachments?.length ? "📎 File attachment" : "Message");
+  
   const payload: N8NSendPayload = {
-    message: trimmedMessage,
+    message: finalMessage,
+    text: finalMessage,
+    input: finalMessage,
+    prompt: finalMessage,
+    query: finalMessage,
+    userMessage: finalMessage,
+    user_message: finalMessage,
+    body: {
+      message: finalMessage,
+      text: finalMessage,
+      input: finalMessage,
+      prompt: finalMessage,
+      query: finalMessage,
+      userMessage: finalMessage,
+      user_message: finalMessage,
+    },
     timestamp: new Date().toISOString(),
   };
   if (trimmedMessage) {
@@ -178,16 +383,6 @@ export async function sendToN8N(
   }
   if (options.sessionId?.trim()) {
     payload.sessionId = options.sessionId.trim();
-  }
-
-  if (audioData) {
-    payload.audio = {
-      format: "pcm_s16le",
-      sampleRate: 16000,
-      channels: 1,
-      data: arrayBufferToBase64(audioData),
-      size: audioData.byteLength,
-    };
   }
 
   if (attachments?.length) {
@@ -206,6 +401,7 @@ export async function sendToN8N(
 
   let lastError: Error | null = null;
   
+  let attemptedFormFallback = false;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       // Log attempt details
@@ -233,21 +429,69 @@ export async function sendToN8N(
       }
 
       try {
-        console.log(`📤 Sending request to N8N webhook: ${config.n8nWebhookUrl}`, {
+      const requestUrl = buildWebhookUrl(config.n8nWebhookUrl, finalMessage);
+      console.log(`📤 Sending request to N8N webhook: ${requestUrl}`, {
           hasMessage: !!(message ?? "").trim(),
+          messageText: trimmedMessage || "(empty, using placeholder)",
+          finalMessage: finalMessage,
           hasAudio: !!audioData,
           audioSizeKb: audioData ? Math.round(audioData.byteLength / 1024) : 0,
+          hasAttachments: !!(attachments?.length),
+          payloadKeys: Object.keys(payload),
         });
         
-        const res = await fetch(config.n8nWebhookUrl, {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/plain, */*",
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
+        // Log full payload structure for debugging (without base64 data)
+        const payloadForLogging = {
+          ...payload,
+          attachments: payload.attachments?.map((a) => ({ ...a, data: `[base64: ${a.data.length} chars]` })),
+        };
+        console.log('📦 Payload structure:', JSON.stringify(payloadForLogging, null, 2));
+        
+      const hasAudio = !!audioData && audioData.byteLength > 0;
+      const hasFiles = !!attachments?.length;
+      const useFormData = hasAudio || hasFiles;
+
+      const res = await fetch(requestUrl, {
+        method: "POST",
+        headers: useFormData
+          ? { "Accept": "application/json, text/plain, */*" }
+          : {
+              "Content-Type": "application/json",
+              "Accept": "application/json, text/plain, */*",
+            },
+        body: useFormData
+          ? (() => {
+              const formData = new FormData();
+              formData.append("message", finalMessage);
+              formData.append("text", finalMessage);
+              formData.append("input", finalMessage);
+              formData.append("prompt", finalMessage);
+              formData.append("query", finalMessage);
+              formData.append("userMessage", finalMessage);
+              formData.append("user_message", finalMessage);
+              formData.append("timestamp", new Date().toISOString());
+              if (trimmedMessage) formData.append("intent", classifyIntent(trimmedMessage));
+              if (options.sessionId?.trim()) formData.append("sessionId", options.sessionId.trim());
+
+              if (hasAudio) {
+                const audioBlob = new Blob([audioData], { type: "audio/mpeg" });
+                formData.append("file", audioBlob, "input.mp3");
+                formData.append("audioFormat", "mp3");
+                formData.append("audioSampleRate", "16000");
+                formData.append("audioChannels", "1");
+              }
+
+              if (attachments?.length) {
+                attachments.forEach((file) => {
+                  formData.append("attachments", file, file.name);
+                });
+              }
+
+              return formData;
+            })()
+          : JSON.stringify(payload),
+        signal: controller.signal,
+      });
 
         clearTimeout(timeoutId);
         abortCleanup();
@@ -313,67 +557,45 @@ export async function sendToN8N(
       }
 
       // Try to parse response
-      let data: N8NResponse | string;
-      const contentType = res.headers.get("content-type") || "";
-      const responseText = await res.text();
-      
-      console.log('📦 N8N response body:', {
-        length: responseText.length,
-        isEmpty: !responseText || responseText.trim().length === 0,
-        preview: responseText.slice(0, 200),
-        fullText: responseText,
-      });
-      
-      // If response is empty, return helpful message (webhook was called; workflow didn't reply)
-      if (!responseText || responseText.trim().length === 0) {
-        console.warn("⚠️ N8N webhook returned empty response", {
-          status: res.status,
-          contentType,
-          url: config.n8nWebhookUrl,
-          sentAudio: !!audioData,
-          audioSize: audioData?.byteLength,
+      let data = await parseWebhookResponse(res, audioData);
+
+      // If n8n says input is empty, retry once using multipart/form-data
+      if (!attemptedFormFallback &&
+          !audioData &&
+          !(attachments && attachments.length > 0) &&
+          responseIndicatesEmptyInput(data)) {
+        attemptedFormFallback = true;
+        console.warn("⚠️ N8N reported empty input; retrying with multipart/form-data");
+        const formData = new FormData();
+        formData.append("message", finalMessage);
+        formData.append("text", finalMessage);
+        formData.append("input", finalMessage);
+        formData.append("prompt", finalMessage);
+        formData.append("query", finalMessage);
+        formData.append("userMessage", finalMessage);
+        formData.append("user_message", finalMessage);
+        formData.append("timestamp", new Date().toISOString());
+        if (trimmedMessage) formData.append("intent", classifyIntent(trimmedMessage));
+        if (options.sessionId?.trim()) formData.append("sessionId", options.sessionId.trim());
+        const retryRes = await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "Accept": "application/json, text/plain, */*",
+            "X-Message": finalMessage,
+          },
+          body: formData,
+          signal: controller.signal,
         });
-        console.warn(
-          "💡 Webhook was called successfully. The workflow is not returning a response. " +
-          "Ensure: (1) IF node routes text vs voice (e.g. TRUE when $json.body.text or $json.body.message is not empty → text path; FALSE → STT for voice), " +
-          "(2) both paths reach AI → TTS → Build TTS response → Respond to Webhook, " +
-          "(3) Respond to Webhook = First Incoming Item, (4) workflow returns JSON with `message`."
-        );
-        const emptyReply = audioData
-          ? "The workflow received your voice message but returned no reply. Ensure your N8N workflow: (1) IF node sends voice (no text) to the FALSE branch → STT, (2) voice path goes STT → AI → … → Respond to Webhook, (3) returns JSON with `message` (and optionally `transcript`), (4) Respond to Webhook is set to **First Incoming Item**."
-          : "The workflow received your message but returned no reply. Ensure **Respond to Webhook** is set to **First Incoming Item** and the workflow returns JSON `{ message }` (and optionally `transcript` for voice).";
-        return emptyReply;
-      }
-      
-      // Try to parse as JSON if content-type suggests JSON or if text looks like JSON
-      const looksLikeJson = responseText.trim().startsWith("{") || responseText.trim().startsWith("[");
-      const isJsonContentType = contentType.includes("application/json");
-      
-      if (isJsonContentType || looksLikeJson) {
-        try {
-          data = JSON.parse(responseText) as N8NResponse | string;
-          console.log("N8N response parsed successfully:", typeof data === "object" ? { ...data, audio: data.audio ? "[audio data present]" : undefined } : data);
-        } catch (parseError) {
-          console.error("Failed to parse JSON response from N8N:", {
-            contentType,
-            responsePreview: responseText.slice(0, 200),
-            error: parseError instanceof Error ? parseError.message : String(parseError)
-          });
-          // If JSON parsing fails but we have text, use the text as the message
-          if (responseText.trim().length > 0) {
-            console.warn("Using response text as fallback message");
-            return responseText.trim();
-          }
-          throw new Error(
-            `Invalid JSON response from N8N webhook. Response preview: ${responseText.slice(0, 100)}`
-          );
+        if (!retryRes.ok) {
+          const retryText = await retryRes.text().catch(() => retryRes.statusText);
+          throw new Error(`N8N webhook error (${retryRes.status}): ${retryText || retryRes.statusText}`);
         }
-      } else {
-        // Not JSON, use text as-is
-        console.log("N8N returned non-JSON response, using as text");
-        data = responseText.trim() || "Processing complete, sir.";
+        data = await parseWebhookResponse(retryRes, audioData);
       }
 
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/10f91d74-8844-4277-88b7-5951a9b21512',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'n8n.ts:395',message:'sendToN8N exit success',data:{returnType:typeof data,isString:typeof data==='string',isObject:typeof data==='object'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       return data;
       } finally {
         clearTimeout(timeoutId);
@@ -441,33 +663,58 @@ export async function sendToN8N(
  * Handles various response formats and validates the response structure.
  */
 export function normalizeN8NResponse(raw: N8NResponse | string): string {
-  if (typeof raw === "string") {
-    return raw.trim() || "Processing complete, sir.";
+  const resolved = unwrapN8NResponse(raw);
+  if (typeof resolved === "string") {
+    const trimmed = resolved.trim();
+    const normalized = trimmed.toLowerCase().replace(/\u2019/g, "'");
+    // Check if the string is an error message from N8N
+    if (normalized.includes("isn't coming through") || 
+        normalized.includes("message isn't") ||
+        normalized.includes("try again")) {
+      console.warn('⚠️ N8N returned error message as string:', trimmed);
+      // Return a more helpful message
+      return "I'm having trouble processing that request. Please try rephrasing your message or check that the N8N workflow is configured correctly.";
+    }
+    return trimmed || "Processing complete, sir.";
   }
   
-  if (!raw || typeof raw !== "object") {
+  if (!resolved || typeof resolved !== "object") {
+    console.warn('⚠️ normalizeN8NResponse: Invalid response type:', typeof resolved);
     return "Processing complete, sir.";
   }
   
   // Try multiple possible response fields
   const text =
-    (raw.message as string) ??
-    (raw.response as string) ??
-    (raw.text as string) ??
-    (raw.content as string);
+    (resolved.message as string) ??
+    (resolved.response as string) ??
+    (resolved.text as string) ??
+    (resolved.content as string) ??
+    (resolved.result as string) ??
+    (resolved.output as string) ??
+    (resolved.answer as string);
   
   if (text && typeof text === "string") {
-    return text.trim();
+    const trimmed = text.trim();
+    const normalized = trimmed.toLowerCase().replace(/\u2019/g, "'");
+    // Check if the message is an error message from N8N
+    if (normalized.includes("isn't coming through") || 
+        normalized.includes("message isn't") ||
+        normalized.includes("try again")) {
+      console.warn('⚠️ N8N returned error message in response field:', trimmed);
+      // Return a more helpful message
+      return "I'm having trouble processing that request. Please try rephrasing your message or check that the N8N workflow is configured correctly.";
+    }
+    return trimmed;
   }
   
   // If we have audio but no text, return a default message
-  if (raw.audio) {
+  if (resolved.audio) {
     return "Audio response received, sir.";
   }
   
   // Log what we received for debugging
-  console.warn('⚠️ normalizeN8NResponse: No message field found in response. Available fields:', Object.keys(raw));
-  console.warn('⚠️ Full response object:', JSON.stringify(raw, null, 2));
+  console.warn('⚠️ normalizeN8NResponse: No message field found in response. Available fields:', Object.keys(resolved));
+  console.warn('⚠️ Full response object:', JSON.stringify(resolved, null, 2));
   
   return "Processing complete, sir.";
 }
@@ -478,17 +725,18 @@ export function normalizeN8NResponse(raw: N8NResponse | string): string {
  * Checks multiple possible field names that n8n workflows might use.
  */
 export function extractTranscriptFromResponse(raw: N8NResponse | string): string | null {
-  if (typeof raw !== "object" || !raw) return null;
+  const resolved = unwrapN8NResponse(raw);
+  if (typeof resolved !== "object" || !resolved) return null;
   
   // Check for transcript fields (common field names n8n workflows might use)
   const transcript =
-    (raw.transcript as string) ??
-    (raw.userMessage as string) ??
-    (raw.user_message as string) ??
-    (raw.input as string) ??
-    (raw.inputText as string) ??
-    (raw.stt_result as string) ??
-    (raw.sttResult as string);
+    (resolved.transcript as string) ??
+    (resolved.userMessage as string) ??
+    (resolved.user_message as string) ??
+    (resolved.input as string) ??
+    (resolved.inputText as string) ??
+    (resolved.stt_result as string) ??
+    (resolved.sttResult as string);
   
   if (transcript && typeof transcript === "string" && transcript.trim().length > 0) {
     console.log("Found transcript in n8n response:", transcript);
@@ -496,7 +744,7 @@ export function extractTranscriptFromResponse(raw: N8NResponse | string): string
   }
   
   // Log available fields for debugging
-  console.log("No transcript found in n8n response. Available fields:", Object.keys(raw));
+  console.log("No transcript found in n8n response. Available fields:", Object.keys(resolved));
   
   return null;
 }
@@ -509,8 +757,9 @@ export function extractTranscriptFromResponse(raw: N8NResponse | string): string
  * Caller may revoke object URLs when done (URL.revokeObjectURL) to avoid leaks.
  */
 export function extractAudioFromResponse(raw: N8NResponse | string): string | null {
-  if (typeof raw !== "object" || !raw?.audio) return null;
-  const a = raw.audio as N8NAudio;
+  const resolved = unwrapN8NResponse(raw);
+  if (typeof resolved !== "object" || !resolved?.audio) return null;
+  const a = resolved.audio as N8NAudio;
   if (typeof a.url === "string" && a.url.trim().length > 0) return a.url.trim();
   if (typeof a.data !== "string" || !a.data.trim()) return null;
   try {

@@ -4,7 +4,7 @@
 
 ### 1. Invalid Webhook URL Format Error (FIXED)
 
-**Error:** `Invalid webhook URL format: /api/n8n/webhook/...`
+**Error:** `Invalid webhook URL format: /api/n8n/webhook-test/e7278dba-076f-4fe9-8c8f-0241e4103ac4`
 
 **Root Cause:** 
 - `config.ts` was trying to validate relative proxy URLs with `new URL()`, which requires absolute URLs
@@ -20,7 +20,35 @@
 
 ---
 
-### 2. Audio Playback Not Working (IN PROGRESS)
+### 2. Page Load Console Errors (FIXED)
+
+**Errors:**
+- `Failed to load resource: 404` for webhook health check
+- `Failed to load resource: 404` for `/favicon.ico`
+- `Failed to load resource: net::ERR_CONNECTION_REFUSED` for debug ingest
+
+**Root Cause:**
+- Health check hit the webhook URL (POST-only) which returns 404 on GET
+- No `favicon.ico` in `public/`
+- Debug ingest requests fired before the app could shim fetch
+
+**Fixes Applied:**
+1. ✅ Health check now hits the N8N base URL (proxy root) instead of the webhook endpoint
+2. ✅ Added early fetch shim in `index.html` to silence debug ingest unless enabled
+3. ✅ Added placeholder `public/favicon.ico` to satisfy browser request
+4. ✅ Improved browser debug tool to log failing URLs and avoid network-idle timeouts
+
+**Files Modified:**
+- `src/api/n8n.ts`
+- `index.html`
+- `scripts/run-browser-debug.mjs`
+- `public/favicon.ico`
+
+**Status:** ✅ FIXED
+
+---
+
+### 3. Audio Playback Not Working (IN PROGRESS)
 
 **Symptoms:**
 - Assistant messages with audio don't auto-play
@@ -50,7 +78,7 @@
 
 ---
 
-### 3. Wrong Voice After 10 Seconds Silence (FIXED)
+### 4. Wrong Voice After 10 Seconds Silence (FIXED)
 
 **Issue:** "Still here" message used browser TTS instead of Cartesia
 
